@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # Pulled from the shell / an .env file at `docker compose up` time.
+      MONGODB_URI: ${MONGODB_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      PING_MESSAGE: ${PING_MESSAGE:-ping pong}
+      NODE_ENV: production
+    restart: unless-stopped
