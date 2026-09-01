@@ -16,6 +16,8 @@ import {
   TrendingUp,
   AlertCircle,
   CheckCircle2,
+  Menu,
+  X,
 } from "lucide-react";
 
 interface TodayAttendance {
@@ -43,6 +45,7 @@ function Dashboard() {
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [isTogglingBreak, setIsTogglingBreak] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
   const { user, token, logout } = useAuth();
@@ -221,9 +224,27 @@ function Dashboard() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-900">AttendanceApp</span>
+            <span className="text-xl font-bold text-gray-900">
+              AttendanceApp
+            </span>
           </div>
-          <div className="flex items-center gap-4">
+
+          {/* Mobile Menu Toggle */}
+          <div className="md:hidden flex items-center">
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="text-gray-600 hover:text-gray-900 focus:outline-none"
+            >
+              {isMobileMenuOpen ? (
+                <X className="w-6 h-6" />
+              ) : (
+                <Menu className="w-6 h-6" />
+              )}
+            </button>
+          </div>
+
+          {/* Desktop Navigation */}
+          <div className="hidden md:flex items-center gap-4">
             <span className="text-sm text-gray-600">Welcome, {user?.name}</span>
             <Link href="/history">
               <Button variant="outline" size="sm">
@@ -251,49 +272,106 @@ function Dashboard() {
             </Button>
           </div>
         </div>
+
+        {/* Mobile Navigation */}
+        {isMobileMenuOpen && (
+          <div className="md:hidden bg-white border-t border-gray-100 shadow-lg">
+            <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
+              <span className="text-sm text-gray-600 py-2 px-4 font-medium">
+                Welcome, {user?.name}
+              </span>
+              <Link href="/history">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start text-gray-700 font-normal"
+                >
+                  History
+                </Button>
+              </Link>
+              <Link href="/reports">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start text-gray-700 font-normal"
+                >
+                  Reports
+                </Button>
+              </Link>
+              <Link href="/settings">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start text-gray-700 font-normal"
+                >
+                  Settings
+                </Button>
+              </Link>
+              <Button
+                variant="ghost"
+                onClick={handleLogout}
+                className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Logout
+              </Button>
+            </div>
+          </div>
+        )}
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {/* Today's Attendance Card */}
         <div className="mb-8">
-          <Card className="p-8 bg-white">
-            <div className="flex items-center justify-between mb-6">
+          <Card className="p-4 lg:p-8 bg-white">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
               <div>
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">Today&apos;s Attendance</h1>
-                <p className="text-gray-600">{formatDate(today?.date || new Date().toISOString())}</p>
+                <h1 className="text-3xl font-bold text-gray-900 mb-2">
+                  Today&apos;s Attendance
+                </h1>
+                <p className="text-gray-600">
+                  {formatDate(today?.date || new Date().toISOString())}
+                </p>
               </div>
               <div className="flex items-center">
                 {today?.checkInTime && !today?.checkOutTime && onBreak && (
                   <div className="flex items-center gap-2">
                     <div className="w-3 h-3 bg-orange-500 rounded-full animate-pulse"></div>
-                    <span className="text-orange-600 font-medium">On Break</span>
+                    <span className="text-orange-600 font-medium">
+                      On Break
+                    </span>
                   </div>
                 )}
                 {today?.checkInTime && !today?.checkOutTime && !onBreak && (
                   <div className="flex items-center gap-2">
                     <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-                    <span className="text-green-600 font-medium">Currently Clocked In</span>
+                    <span className="text-green-600 font-medium">
+                      Currently Clocked In
+                    </span>
                   </div>
                 )}
                 {today?.checkOutTime && (
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    <span className="text-green-600 font-medium">Completed</span>
+                    <span className="text-green-600 font-medium">
+                      Completed
+                    </span>
                   </div>
                 )}
                 {!today?.checkInTime && (
                   <div className="flex items-center gap-2">
                     <AlertCircle className="w-5 h-5 text-gray-400" />
-                    <span className="text-gray-600 font-medium">Not Checked In</span>
+                    <span className="text-gray-600 font-medium">
+                      Not Checked In
+                    </span>
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
               <div className="bg-gray-50 rounded-lg p-4">
                 <p className="text-sm text-gray-600 mb-1">Check In Time</p>
-                <p className="text-2xl font-bold text-gray-900">{formatTime(today?.checkInTime)}</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatTime(today?.checkInTime)}
+                </p>
               </div>
               <div className="bg-gray-50 rounded-lg p-4">
                 <p className="text-sm text-gray-600 mb-1">Check Out Time</p>
@@ -311,39 +389,43 @@ function Dashboard() {
                 <p className="text-sm text-gray-600 mb-1">Break Time</p>
                 <p className="text-2xl font-bold text-gray-900">
                   {formatDuration(
-                    today?.breakMinutes ?? totalBreakMinutes(today?.breaks)
+                    today?.breakMinutes ?? totalBreakMinutes(today?.breaks),
                   )}
                 </p>
               </div>
               <div className="bg-gray-50 rounded-lg p-4">
                 <p className="text-sm text-gray-600 mb-1">Status</p>
-                <p className={`text-2xl font-bold capitalize ${
-                  today?.status === "present"
-                    ? "text-green-600"
-                    : today?.status === "late"
-                      ? "text-yellow-600"
-                      : "text-red-600"
-                }`}>
+                <p
+                  className={`text-2xl font-bold capitalize ${
+                    today?.status === "present"
+                      ? "text-green-600"
+                      : today?.status === "late"
+                        ? "text-yellow-600"
+                        : "text-red-600"
+                  }`}
+                >
                   {today?.status || "absent"}
                 </p>
               </div>
             </div>
 
-            <div className="flex gap-4">
+            <div className="flex flex-col sm:flex-row gap-4">
               <Button
                 onClick={handleCheckIn}
                 disabled={isCheckingIn || !!today?.checkInTime}
                 size="lg"
-                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300"
+                className="w-full sm:w-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-300"
               >
                 {isCheckingIn ? "Checking In..." : "Check In"}
               </Button>
 
               <Button
                 onClick={handleCheckOut}
-                disabled={isCheckingOut || !today?.checkInTime || !!today?.checkOutTime}
+                disabled={
+                  isCheckingOut || !today?.checkInTime || !!today?.checkOutTime
+                }
                 size="lg"
-                className="bg-red-600 hover:bg-red-700 disabled:bg-gray-300"
+                className="w-full sm:w-auto bg-red-600 hover:bg-red-700 disabled:bg-gray-300"
               >
                 {isCheckingOut ? "Checking Out..." : "Check Out"}
               </Button>
@@ -352,12 +434,14 @@ function Dashboard() {
         </div>
 
         {/* Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           <Card className="p-6 bg-white">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Present Days</p>
-                <p className="text-3xl font-bold text-green-600">{stats?.totalPresent || 0}</p>
+                <p className="text-3xl font-bold text-green-600">
+                  {stats?.totalPresent || 0}
+                </p>
               </div>
               <CheckCircle2 className="w-8 h-8 text-green-600 opacity-20" />
             </div>
@@ -367,7 +451,9 @@ function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Late Days</p>
-                <p className="text-3xl font-bold text-yellow-600">{stats?.totalLate || 0}</p>
+                <p className="text-3xl font-bold text-yellow-600">
+                  {stats?.totalLate || 0}
+                </p>
               </div>
               <AlertCircle className="w-8 h-8 text-yellow-600 opacity-20" />
             </div>
@@ -377,7 +463,9 @@ function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Absent Days</p>
-                <p className="text-3xl font-bold text-red-600">{stats?.totalAbsent || 0}</p>
+                <p className="text-3xl font-bold text-red-600">
+                  {stats?.totalAbsent || 0}
+                </p>
               </div>
               <AlertCircle className="w-8 h-8 text-red-600 opacity-20" />
             </div>
@@ -387,7 +475,9 @@ function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Overtime Hours</p>
-                <p className="text-3xl font-bold text-blue-600">{stats?.totalOvertime || 0}</p>
+                <p className="text-3xl font-bold text-blue-600">
+                  {stats?.totalOvertime || 0}
+                </p>
               </div>
               <TrendingUp className="w-8 h-8 text-blue-600 opacity-20" />
             </div>

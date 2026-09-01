@@ -8,7 +8,15 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { RequireAuth } from "@/components/require-auth";
 import { Input } from "@/components/ui/input";
-import { Calendar, Clock, Download, LayoutDashboard, Plus } from "lucide-react";
+import {
+  Calendar,
+  Clock,
+  Download,
+  LayoutDashboard,
+  Plus,
+  Menu,
+  X,
+} from "lucide-react";
 import type { AttendanceRecord } from "@/types/api";
 import {
   DAY_TYPES,
@@ -18,8 +26,18 @@ import {
 } from "@/lib/attendance";
 
 const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 function formatTime(iso?: string): string {
@@ -50,7 +68,7 @@ function toTimeInput(iso?: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes()
+    d.getMinutes(),
   ).padStart(2, "0")}`;
 }
 
@@ -108,6 +126,7 @@ function History() {
   const [isSaving, setIsSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [addDate, setAddDate] = useState("");
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const fetchHistory = useCallback(async () => {
     if (!token) return;
@@ -190,7 +209,7 @@ function History() {
     try {
       const res = await fetch(
         `/api/attendance/record?date=${encodeURIComponent(date)}`,
-        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
       );
       if (!res.ok) {
         const data = await res.json();
@@ -212,7 +231,7 @@ function History() {
   const completed = records.filter((r) => typeof r.hoursWorked === "number");
   const totalHours = completed.reduce((s, r) => s + (r.hoursWorked || 0), 0);
   const openDays = records.filter(
-    (r) => r.checkInTime && !r.checkOutTime
+    (r) => r.checkInTime && !r.checkOutTime,
   ).length;
 
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
@@ -227,7 +246,23 @@ function History() {
               AttendanceApp
             </span>
           </div>
-          <div className="flex items-center gap-3">
+
+          {/* Mobile Menu Toggle */}
+          <div className="md:hidden flex items-center">
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="text-gray-600 hover:text-gray-900 focus:outline-none"
+            >
+              {isMobileMenuOpen ? (
+                <X className="w-6 h-6" />
+              ) : (
+                <Menu className="w-6 h-6" />
+              )}
+            </button>
+          </div>
+
+          {/* Desktop Navigation */}
+          <div className="hidden md:flex items-center gap-3">
             <Link href="/dashboard">
               <Button variant="outline" size="sm">
                 <LayoutDashboard className="w-4 h-4 mr-2" />
@@ -242,6 +277,32 @@ function History() {
             </Link>
           </div>
         </div>
+
+        {/* Mobile Navigation */}
+        {isMobileMenuOpen && (
+          <div className="md:hidden bg-white border-t border-gray-100 shadow-lg">
+            <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
+              <Link href="/dashboard">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start text-gray-700 font-normal"
+                >
+                  <LayoutDashboard className="w-4 h-4 mr-2" />
+                  Dashboard
+                </Button>
+              </Link>
+              <Link href="/reports">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start text-gray-700 font-normal"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Reports
+                </Button>
+              </Link>
+            </div>
+          </div>
+        )}
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -267,7 +328,7 @@ function History() {
                 value={month}
                 onChange={(e) =>
                   setMonth(
-                    e.target.value === "all" ? "all" : Number(e.target.value)
+                    e.target.value === "all" ? "all" : Number(e.target.value),
                   )
                 }
                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
@@ -445,7 +506,7 @@ function History() {
         {/* Table */}
         <Card className="bg-white overflow-hidden">
           {isLoading ? (
-            <p className="p-8 text-center text-gray-500">Loading…</p>
+            <p className="p-4 lg:p-8 text-center text-gray-500">Loading…</p>
           ) : records.length === 0 ? (
             <div className="p-12 text-center">
               <Calendar className="w-10 h-10 text-gray-300 mx-auto mb-3" />
@@ -454,7 +515,10 @@ function History() {
               </p>
               <p className="text-gray-500 text-sm">
                 Nothing for{" "}
-                {month === "all" ? year : `${MONTHS[(month as number) - 1]} ${year}`}.
+                {month === "all"
+                  ? year
+                  : `${MONTHS[(month as number) - 1]} ${year}`}
+                .
               </p>
             </div>
           ) : (
@@ -462,22 +526,22 @@ function History() {
               <table className="w-full text-left">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Date
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Check in
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Check out
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Hours
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Status
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>
@@ -489,7 +553,7 @@ function History() {
                     return (
                       <Fragment key={record._id || record.date}>
                         <tr className="hover:bg-gray-50">
-                          <td className="px-6 py-4">
+                          <td className="px-6 py-4 whitespace-nowrap">
                             <span className="font-medium text-gray-900">
                               {label}
                             </span>
@@ -505,13 +569,13 @@ function History() {
                               </span>
                             )}
                           </td>
-                          <td className="px-6 py-4 text-gray-700">
+                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
                             {formatTime(record.checkInTime)}
                           </td>
-                          <td className="px-6 py-4 text-gray-700">
+                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
                             {formatTime(record.checkOutTime)}
                           </td>
-                          <td className="px-6 py-4 text-gray-700">
+                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
                             {typeof record.hoursWorked === "number"
                               ? `${record.hoursWorked.toFixed(2)}h`
                               : "—"}
@@ -526,10 +590,10 @@ function History() {
                               </span>
                             )}
                           </td>
-                          <td className="px-6 py-4">
+                          <td className="px-6 py-4 whitespace-nowrap">
                             <StatusBadge record={record} />
                           </td>
-                          <td className="px-6 py-4 text-right">
+                          <td className="px-6 py-4 text-right whitespace-nowrap">
                             <button
                               type="button"
                               onClick={() =>

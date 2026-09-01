@@ -14,7 +14,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
       <div className="w-full max-w-md">
-        <div className="bg-white rounded-lg shadow-lg p-8">
+        <div className="bg-white rounded-lg shadow-lg p-4 lg:p-8">
           <div className="flex items-center justify-center gap-2 mb-8">
             <Clock className="w-8 h-8 text-blue-600" />
             <span className="text-2xl font-bold text-gray-900">
@@ -168,7 +168,10 @@ function ResetPasswordForm() {
       </form>
 
       <p className="text-center text-gray-600 mt-6">
-        <Link href="/login" className="text-blue-600 hover:underline font-medium">
+        <Link
+          href="/login"
+          className="text-blue-600 hover:underline font-medium"
+        >
           Back to sign in
         </Link>
       </p>

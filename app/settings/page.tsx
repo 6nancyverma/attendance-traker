@@ -16,7 +16,7 @@ import {
   getStandardHours,
   type WorkSchedule,
 } from "@/lib/work-schedule";
-import { Clock, LayoutDashboard } from "lucide-react";
+import { Clock, LayoutDashboard, Menu, X } from "lucide-react";
 
 function Settings() {
   const { user, token } = useAuth();
@@ -32,6 +32,7 @@ function Settings() {
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(true);
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const loadSchedule = useCallback(async () => {
     if (!token) return;
@@ -167,13 +168,45 @@ function Settings() {
               AttendanceApp
             </span>
           </div>
-          <Link href="/dashboard">
-            <Button variant="outline" size="sm">
-              <LayoutDashboard className="w-4 h-4 mr-2" />
-              Dashboard
-            </Button>
-          </Link>
+
+          {/* Mobile Menu Toggle */}
+          <div className="md:hidden flex items-center">
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="text-gray-600 hover:text-gray-900 focus:outline-none"
+            >
+              {isMobileMenuOpen ? (
+                <X className="w-6 h-6" />
+              ) : (
+                <Menu className="w-6 h-6" />
+              )}
+            </button>
+          </div>
+
+          {/* Desktop Navigation */}
+          <div className="hidden md:flex items-center gap-4">
+            <Link href="/dashboard">
+              <Button variant="outline" size="sm">
+                <LayoutDashboard className="w-4 h-4 mr-2" />
+                Dashboard
+              </Button>
+            </Link>
+          </div>
         </div>
+
+        {/* Mobile Navigation */}
+        {isMobileMenuOpen && (
+          <div className="md:hidden bg-white border-t border-gray-100 shadow-lg">
+            <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
+              <Link href="/dashboard">
+                <Button variant="ghost" className="w-full justify-start text-gray-700 font-normal">
+                  <LayoutDashboard className="w-4 h-4 mr-2" />
+                  Dashboard
+                </Button>
+              </Link>
+            </div>
+          </div>
+        )}
       </header>
 
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
