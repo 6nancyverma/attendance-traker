@@ -43,6 +43,7 @@ interface AttendanceStats {
   totalAbsent: number;
   totalLate: number;
   totalOvertime: number;
+  totalOvertimeHours?: number;
   averageHoursWorked: number;
 }
 
@@ -512,7 +513,11 @@ function Dashboard() {
               <div>
                 <p className="text-sm text-gray-600 mb-1">Overtime Hours</p>
                 <p className="text-3xl font-bold text-blue-600">
-                  {stats?.totalOvertime || 0}
+                  {formatHours(stats?.totalOvertimeHours)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {stats?.totalOvertime || 0}{" "}
+                  {stats?.totalOvertime === 1 ? "day" : "days"} with overtime
                 </p>
               </div>
               <TrendingUp className="w-8 h-8 text-blue-600 opacity-20" />

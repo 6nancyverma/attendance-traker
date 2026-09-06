@@ -9,6 +9,7 @@ import {
 import { ObjectId } from "mongodb";
 import { getStandardHours, normalizeSchedule } from "@/lib/work-schedule";
 import { normalizeHolidays } from "@/lib/holidays";
+import { splitHours, standardHoursForDate } from "@/lib/attendance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -91,6 +92,18 @@ export async function GET(req: NextRequest) {
       0,
     );
 
+    // Overtime hours: whatever each day ran past its expected length (all of
+    // it on weekly offs and holidays), the same split the history page shows.
+    const totalOvertimeHours = withHours.reduce(
+      (sum, r) =>
+        sum +
+        splitHours(
+          r.hoursWorked || 0,
+          standardHoursForDate(r.date, schedule, holidays),
+        ).overtime,
+      0,
+    );
+
     const stats = {
       totalPresent: records.filter((r) => r.status === "present").length,
       totalAbsent,
@@ -102,6 +115,7 @@ export async function GET(req: NextRequest) {
         ? totalHoursWorked / withHours.length
         : 0,
       totalHoursWorked: Math.round(totalHoursWorked * 100) / 100,
+      totalOvertimeHours: Math.round(totalOvertimeHours * 100) / 100,
       totalLeave,
       totalBreakMinutes: Math.round(
         records.reduce((sum, r) => sum + (r.breakMinutes || 0), 0),

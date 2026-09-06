@@ -17,6 +17,7 @@ import {
   type WorkSchedule,
 } from "@/lib/work-schedule";
 import { Clock, LayoutDashboard, Menu, X } from "lucide-react";
+import type { AuthResponse } from "@/types/api";
 import {
   isValidHolidayDate,
   MAX_HOLIDAY_NAME,
@@ -25,8 +26,77 @@ import {
 } from "@/lib/holidays";
 
 function Settings() {
-  const { user, token } = useAuth();
+  const { user, token, login } = useAuth();
   const { toast } = useToast();
+
+  // Profile: name and email. The values live in the JWT as well, so a save
+  // returns a fresh token which `login` stores — the header updates at once.
+  const [profileName, setProfileName] = useState("");
+  const [profileEmail, setProfileEmail] = useState("");
+  const [profilePassword, setProfilePassword] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user) {
+      setProfileName(user.name ?? "");
+      setProfileEmail(user.email ?? "");
+    }
+  }, [user]);
+
+  const emailChanged =
+    profileEmail.trim().toLowerCase() !== (user?.email ?? "").toLowerCase();
+  const profileDirty =
+    emailChanged || profileName.trim() !== (user?.name ?? "");
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProfileError(null);
+
+    if (!profileName.trim()) {
+      setProfileError("Name is required.");
+      return;
+    }
+    if (emailChanged && !profilePassword) {
+      setProfileError("Enter your current password to change your email.");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const res = await fetch("/api/settings/profile", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: profileName.trim(),
+          email: profileEmail.trim(),
+          currentPassword: emailChanged ? profilePassword : undefined,
+        }),
+      });
+      const data = (await res.json()) as AuthResponse & { error?: string };
+
+      if (!res.ok) {
+        setProfileError(data.error || "Could not save your profile.");
+        return;
+      }
+
+      login(data.token, data.user);
+      setProfilePassword("");
+      toast({
+        title: "Profile saved",
+        description: emailChanged
+          ? "Use your new email the next time you sign in."
+          : "Your name has been updated.",
+      });
+    } catch {
+      setProfileError("An error occurred. Please try again.");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -293,23 +363,105 @@ function Settings() {
         <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
 
         <Card className="p-6 bg-white mb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Account</h2>
-          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-            <div>
-              <dt className="text-gray-500 mb-1">Name</dt>
-              <dd className="text-gray-900 font-medium">{user?.name}</dd>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Profile</h2>
+          <p className="text-sm text-gray-600 mb-6">
+            Your name appears on the dashboard and in reports. Changing your
+            email changes what you sign in with, so it asks for your password.
+          </p>
+
+          <form onSubmit={handleSaveProfile} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="profile-name"
+                  className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                  Name
+                </label>
+                <Input
+                  id="profile-name"
+                  value={profileName}
+                  maxLength={80}
+                  autoComplete="name"
+                  onChange={(e) => {
+                    setProfileError(null);
+                    setProfileName(e.target.value);
+                  }}
+                  required
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="profile-email"
+                  className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                  Email
+                </label>
+                <Input
+                  id="profile-email"
+                  type="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  autoComplete="email"
+                  spellCheck={false}
+                  value={profileEmail}
+                  onChange={(e) => {
+                    setProfileError(null);
+                    setProfileEmail(e.target.value);
+                  }}
+                  required
+                  className="w-full"
+                />
+              </div>
             </div>
-            <div>
-              <dt className="text-gray-500 mb-1">Email</dt>
-              <dd className="text-gray-900 font-medium">{user?.email}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500 mb-1">Role</dt>
-              <dd className="text-gray-900 font-medium capitalize">
+
+            {emailChanged && (
+              <div>
+                <label
+                  htmlFor="profile-password"
+                  className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                  Current password
+                </label>
+                <Input
+                  id="profile-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={profilePassword}
+                  onChange={(e) => {
+                    setProfileError(null);
+                    setProfilePassword(e.target.value);
+                  }}
+                  className="w-full"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Needed because you are changing the email you sign in with.
+                </p>
+              </div>
+            )}
+
+            <p className="text-sm text-gray-600">
+              Role:{" "}
+              <span className="font-medium text-gray-900 capitalize">
                 {user?.role}
-              </dd>
-            </div>
-          </dl>
+              </span>
+            </p>
+
+            {profileError && (
+              <p role="alert" className="text-sm text-red-600">
+                {profileError}
+              </p>
+            )}
+
+            <Button
+              type="submit"
+              disabled={isSavingProfile || !profileDirty}
+              className="!w-full sm:!w-auto bg-blue-600 hover:bg-blue-700"
+            >
+              {isSavingProfile ? "Saving..." : "Save profile"}
+            </Button>
+          </form>
         </Card>
 
         <Card className="p-6 bg-white mb-6">

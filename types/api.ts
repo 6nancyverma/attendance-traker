@@ -87,6 +87,8 @@ export interface AttendanceStatsResponse {
   totalOvertime: number;
   averageHoursWorked: number;
   totalHoursWorked: number;
+  /** Hours beyond the expected day length, summed over the period. */
+  totalOvertimeHours: number;
   /** Days marked leave/sick/holiday — accounted for, so not counted absent. */
   totalLeave: number;
   totalBreakMinutes: number;

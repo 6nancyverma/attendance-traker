@@ -230,8 +230,10 @@ function Reports() {
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <p className="text-sm text-blue-900">
-              <strong>Report includes:</strong> Check-in/out times, hours
-              worked, overtime, late arrivals, and absences
+              <strong>Report includes:</strong> one row per day with
+              check-in/out times, break, working hours, overtime hours and
+              total hours, plus weekly offs, holidays, leave and a paid-days
+              summary
             </p>
           </div>
 

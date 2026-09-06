@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   Plus,
   Menu,
+  Settings as SettingsIcon,
   X,
 } from "lucide-react";
 import type { AttendanceRecord } from "@/types/api";
@@ -171,6 +172,46 @@ function History() {
   const [showAdd, setShowAdd] = useState(false);
   const [addDate, setAddDate] = useState("");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  /** Download the CSV report for whatever the filters currently show. */
+  const downloadCsv = async () => {
+    setIsDownloading(true);
+    try {
+      const params = new URLSearchParams({
+        year: String(year),
+        type: month === "all" ? "yearly" : "monthly",
+      });
+      if (month !== "all") params.set("month", String(month));
+
+      const res = await fetch(`/api/reports/generate?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Request failed");
+
+      const blob = new Blob([await res.text()], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download =
+        month === "all"
+          ? `attendance-report-${year}.csv`
+          : `attendance-report-${year}-${month}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast({ title: "Downloaded", description: "Open it in any spreadsheet." });
+    } catch {
+      toast({
+        title: "Couldn't download",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   const fetchHistory = useCallback(async () => {
     if (!token) return;
@@ -288,6 +329,14 @@ function History() {
   };
 
   const deleteDay = async (date: string) => {
+    // Deleting a day is the one action here that can't be undone.
+    if (
+      !window.confirm(
+        `Remove everything recorded for ${date}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
     setIsSaving(true);
     try {
       const res = await fetch(
@@ -414,6 +463,12 @@ function History() {
                 Reports
               </Button>
             </Link>
+            <Link href="/settings">
+              <Button variant="outline" size="sm">
+                <SettingsIcon className="w-4 h-4 mr-2" />
+                Settings
+              </Button>
+            </Link>
           </div>
         </div>
 
@@ -437,6 +492,15 @@ function History() {
                 >
                   <Download className="w-4 h-4 mr-2" />
                   Reports
+                </Button>
+              </Link>
+              <Link href="/settings">
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start text-gray-700 font-normal"
+                >
+                  <SettingsIcon className="w-4 h-4 mr-2" />
+                  Settings
                 </Button>
               </Link>
             </div>
@@ -500,6 +564,18 @@ function History() {
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div className="sm:ml-auto">
+              <Button
+                variant="outline"
+                onClick={downloadCsv}
+                disabled={isDownloading || isLoading}
+                className="!w-auto"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                {isDownloading ? "Preparing…" : "Download CSV"}
+              </Button>
             </div>
           </div>
         </Card>
