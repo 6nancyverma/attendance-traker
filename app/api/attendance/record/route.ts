@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { connectToDatabase } from "@/lib/db";
 import { requireAuth } from "@/lib/api-auth";
-import { normalizeSchedule } from "@/lib/work-schedule";
+import {
+  isValidTime,
+  normalizeSchedule,
+  timeToMinutes,
+} from "@/lib/work-schedule";
+import { normalizeHolidays } from "@/lib/holidays";
 import {
   computeHoursWorked,
+  effectiveBreakMinutes,
   isDayType,
-  isOvertimeFor,
-  totalBreakMinutes,
+  standardHoursForDate,
   type BreakEntry,
   type DayType,
 } from "@/lib/attendance";
@@ -20,27 +25,82 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 interface UpsertBody {
   date?: string;
   dayType?: DayType;
-  /** Local "HH:MM"; empty string clears the time. */
+  /** The user's local "HH:MM"; empty string clears the time. */
   checkIn?: string;
   checkOut?: string;
+  /**
+   * The same times as exact ISO instants, computed in the browser.
+   *
+   * The server can't do that conversion itself: it may run in a different
+   * timezone (UTC on Vercel/Docker), so "10:00" typed in India used to be
+   * saved as 10:00 UTC and shown back as 3:30 PM. Empty string clears.
+   */
+  checkInAt?: string;
+  checkOutAt?: string;
   note?: string;
 }
 
-/** Combine a YYYY-MM-DD key and local HH:MM into an ISO timestamp. */
+/**
+ * Fallback for callers that only send HH:MM: combine it with the date in the
+ * server's own timezone. Only correct when server and user share a timezone.
+ */
 function toIso(dateKey: string, time: string): string | null {
-  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) return null;
+  if (!isValidTime(time)) return null;
   const d = new Date(`${dateKey}T${time}:00`);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-async function loadSchedule(db: Awaited<ReturnType<typeof connectToDatabase>>["db"], userId: string) {
+/**
+ * Work out the stored timestamp for one of the two times.
+ * Precedence: exact instant from the browser → HH:MM (server-local fallback)
+ * → whatever is already stored.
+ */
+function resolveTime(
+  dateKey: string,
+  label: "checkIn" | "checkOut",
+  instant: string | undefined,
+  wallClock: string | undefined,
+  current: string | undefined
+): { value: string | undefined; error?: string } {
+  if (instant !== undefined) {
+    if (instant === "") return { value: undefined };
+    const d = new Date(instant);
+    if (Number.isNaN(d.getTime())) {
+      return { value: undefined, error: `${label}At must be an ISO timestamp` };
+    }
+    return { value: d.toISOString() };
+  }
+  if (wallClock !== undefined) {
+    if (wallClock === "") return { value: undefined };
+    const iso = toIso(dateKey, wallClock);
+    if (!iso) {
+      return {
+        value: undefined,
+        error: `${label} must be in 24-hour HH:MM format`,
+      };
+    }
+    return { value: iso };
+  }
+  return { value: current };
+}
+
+async function loadSchedule(
+  db: Awaited<ReturnType<typeof connectToDatabase>>["db"],
+  userId: string
+) {
   try {
     const rec = await db
       .collection("users")
-      .findOne({ _id: new ObjectId(userId) }, { projection: { workSchedule: 1 } });
-    return normalizeSchedule(rec?.workSchedule ?? null);
+      .findOne(
+        { _id: new ObjectId(userId) },
+        { projection: { workSchedule: 1, holidays: 1 } }
+      );
+    return {
+      schedule: normalizeSchedule(rec?.workSchedule ?? null),
+      holidays: normalizeHolidays(rec?.holidays ?? null),
+    };
   } catch {
-    return normalizeSchedule(null);
+    return { schedule: normalizeSchedule(null), holidays: normalizeHolidays(null) };
   }
 }
 
@@ -110,40 +170,28 @@ export async function PUT(req: NextRequest) {
     }
 
     // Working day: resolve the times.
-    let checkInTime: string | undefined =
-      (existing?.checkInTime as string) ?? undefined;
-    let checkOutTime: string | undefined =
-      (existing?.checkOutTime as string) ?? undefined;
-
-    if (body.checkIn !== undefined) {
-      if (body.checkIn === "") {
-        checkInTime = undefined;
-      } else {
-        const iso = toIso(date, body.checkIn);
-        if (!iso) {
-          return NextResponse.json(
-            { error: "checkIn must be in 24-hour HH:MM format" },
-            { status: 400 }
-          );
-        }
-        checkInTime = iso;
-      }
+    const resolvedIn = resolveTime(
+      date,
+      "checkIn",
+      body.checkInAt,
+      body.checkIn,
+      (existing?.checkInTime as string) ?? undefined
+    );
+    if (resolvedIn.error) {
+      return NextResponse.json({ error: resolvedIn.error }, { status: 400 });
     }
-
-    if (body.checkOut !== undefined) {
-      if (body.checkOut === "") {
-        checkOutTime = undefined;
-      } else {
-        const iso = toIso(date, body.checkOut);
-        if (!iso) {
-          return NextResponse.json(
-            { error: "checkOut must be in 24-hour HH:MM format" },
-            { status: 400 }
-          );
-        }
-        checkOutTime = iso;
-      }
+    const resolvedOut = resolveTime(
+      date,
+      "checkOut",
+      body.checkOutAt,
+      body.checkOut,
+      (existing?.checkOutTime as string) ?? undefined
+    );
+    if (resolvedOut.error) {
+      return NextResponse.json({ error: resolvedOut.error }, { status: 400 });
     }
+    const checkInTime = resolvedIn.value;
+    const checkOutTime = resolvedOut.value;
 
     if (checkOutTime && !checkInTime) {
       return NextResponse.json(
@@ -165,7 +213,7 @@ export async function PUT(req: NextRequest) {
     const breaks: BreakEntry[] = Array.isArray(existing?.breaks)
       ? (existing!.breaks as BreakEntry[])
       : [];
-    const schedule = await loadSchedule(db, user._id);
+    const { schedule, holidays } = await loadSchedule(db, user._id);
 
     const set: Record<string, unknown> = {
       userId: user._id,
@@ -179,22 +227,43 @@ export async function PUT(req: NextRequest) {
 
     if (checkInTime) {
       set.checkInTime = checkInTime;
-      const arrived = new Date(checkInTime);
-      const minutes = arrived.getHours() * 60 + arrived.getMinutes();
-      const [sh, sm] = schedule.startTime.split(":").map(Number);
-      const late = minutes > sh * 60 + sm + schedule.graceMinutes;
-      set.status = late ? "late" : "present";
+      // "Late" is about the user's wall clock, so prefer the HH:MM they typed
+      // over reading hours off the instant in the server's timezone.
+      let arrivedMinutes: number | null = null;
+      if (body.checkIn && isValidTime(body.checkIn)) {
+        arrivedMinutes = timeToMinutes(body.checkIn);
+      } else if (checkInTime !== existing?.checkInTime) {
+        const arrived = new Date(checkInTime);
+        arrivedMinutes = arrived.getHours() * 60 + arrived.getMinutes();
+      }
+      if (arrivedMinutes !== null) {
+        const late =
+          arrivedMinutes >
+          timeToMinutes(schedule.startTime) + schedule.graceMinutes;
+        set.status = late ? "late" : "present";
+      } else {
+        // Check-in unchanged and no wall-clock time given: keep the status.
+        set.status = existing?.status ?? "present";
+      }
     } else {
       unset.checkInTime = "";
       set.status = "absent";
     }
 
     if (checkInTime && checkOutTime) {
-      const hoursWorked = computeHoursWorked(checkInTime, checkOutTime, breaks);
+      const hoursWorked = computeHoursWorked(
+        checkInTime,
+        checkOutTime,
+        breaks,
+        schedule.breakMinutes
+      );
       set.checkOutTime = checkOutTime;
       set.hoursWorked = hoursWorked;
-      set.isOvertime = isOvertimeFor(hoursWorked, schedule);
-      set.breakMinutes = Math.round(totalBreakMinutes(breaks));
+      set.isOvertime =
+        hoursWorked > standardHoursForDate(date, schedule, holidays);
+      set.breakMinutes = Math.round(
+        effectiveBreakMinutes(breaks, schedule.breakMinutes)
+      );
     } else {
       unset.checkOutTime = "";
       unset.hoursWorked = "";

@@ -38,7 +38,7 @@ function SignupForm() {
       const response = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ name, email: email.trim(), password }),
       });
 
       if (!response.ok) {
@@ -109,6 +109,10 @@ function SignupForm() {
               </label>
               <Input
                 type="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="email"
+                spellCheck={false}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"

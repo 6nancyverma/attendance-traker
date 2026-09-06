@@ -3,15 +3,13 @@ import { connectToDatabase } from "@/lib/db";
 import { requireAuth } from "@/lib/api-auth";
 import { toLocalDateKey } from "@/lib/date";
 import { ObjectId } from "mongodb";
-import {
-  getStandardHours,
-  isOvertime as exceedsStandardHours,
-  normalizeSchedule,
-} from "@/lib/work-schedule";
+import { getStandardHours, normalizeSchedule } from "@/lib/work-schedule";
+import { normalizeHolidays } from "@/lib/holidays";
 import {
   computeHoursWorked,
+  effectiveBreakMinutes,
   getOpenBreak,
-  totalBreakMinutes,
+  standardHoursForDate,
   type BreakEntry,
 } from "@/lib/attendance";
 
@@ -57,29 +55,39 @@ export async function POST(req: NextRequest) {
     const open = getOpenBreak(breaks);
     if (open) open.end = checkOutTime;
 
-    // Hours worked is elapsed time minus breaks, not raw check-out − check-in.
-    const hoursWorked = computeHoursWorked(
-      record.checkInTime,
-      checkOutTime,
-      breaks
-    );
-    const breakMinutes = Math.round(totalBreakMinutes(breaks));
-
-    // Overtime is measured against the user's own day length, not a fixed 8h.
+    // Overtime is measured against the user's own day length, not a fixed 8h,
+    // and the standard break comes from the same schedule.
     let scheduleSource: unknown = null;
+    let holidaysSource: unknown = null;
     try {
       const userRecord = await db
         .collection("users")
         .findOne(
           { _id: new ObjectId(user._id) },
-          { projection: { workSchedule: 1 } }
+          { projection: { workSchedule: 1, holidays: 1 } }
         );
       scheduleSource = userRecord?.workSchedule ?? null;
+      holidaysSource = userRecord?.holidays ?? null;
     } catch {
       // Fall through to defaults — never block a check-out over settings.
     }
     const schedule = normalizeSchedule(scheduleSource);
-    const isOvertime = exceedsStandardHours(hoursWorked, schedule);
+    const holidays = normalizeHolidays(holidaysSource);
+
+    // Hours worked is elapsed time minus the break deduction, not raw
+    // check-out − check-in.
+    const hoursWorked = computeHoursWorked(
+      record.checkInTime,
+      checkOutTime,
+      breaks,
+      schedule.breakMinutes
+    );
+    const breakMinutes = Math.round(
+      effectiveBreakMinutes(breaks, schedule.breakMinutes)
+    );
+    // On a weekly off the expected hours are zero, so it is all overtime.
+    const isOvertime =
+      hoursWorked > standardHoursForDate(today, schedule, holidays);
 
     await attendanceCollection.updateOne(
       { _id: record._id },

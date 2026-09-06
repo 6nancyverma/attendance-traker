@@ -8,7 +8,11 @@ import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { RequireAuth } from "@/components/require-auth";
-import { formatDuration, totalBreakMinutes } from "@/lib/attendance";
+import {
+  formatDuration,
+  formatHours,
+  totalBreakMinutes,
+} from "@/lib/attendance";
 import {
   Clock,
   LogOut,
@@ -28,6 +32,10 @@ interface TodayAttendance {
   hoursWorked?: number;
   breaks?: { start: string; end?: string }[];
   breakMinutes?: number;
+  /** True when today is not one of the user's working days. */
+  weeklyOff?: boolean;
+  /** Name of today's holiday from the user's list, if any. */
+  holiday?: string | null;
 }
 
 interface AttendanceStats {
@@ -56,9 +64,11 @@ function Dashboard() {
       const [todayRes, statsRes] = await Promise.all([
         fetch("/api/attendance/today", {
           headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
         }),
         fetch("/api/attendance/stats", {
           headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
         }),
       ]);
 
@@ -166,6 +176,12 @@ function Dashboard() {
   };
 
   const onBreak = !!today?.breaks?.some((b) => !b.end);
+  // A paid day off: a listed holiday, or a day outside the working days.
+  const offLabel = today?.holiday
+    ? `Holiday — ${today.holiday}`
+    : today?.weeklyOff
+      ? "Weekly off — enjoy your day"
+      : null;
 
   const handleBreak = async (action: "start" | "end") => {
     setIsTogglingBreak(true);
@@ -355,7 +371,15 @@ function Dashboard() {
                     </span>
                   </div>
                 )}
-                {!today?.checkInTime && (
+                {!today?.checkInTime && offLabel && (
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-5 h-5 text-purple-500" />
+                    <span className="text-purple-700 font-medium">
+                      {offLabel}
+                    </span>
+                  </div>
+                )}
+                {!today?.checkInTime && !offLabel && (
                   <div className="flex items-center gap-2">
                     <AlertCircle className="w-5 h-5 text-gray-400" />
                     <span className="text-gray-600 font-medium">
@@ -382,7 +406,7 @@ function Dashboard() {
               <div className="bg-gray-50 rounded-lg p-4">
                 <p className="text-sm text-gray-600 mb-1">Hours Worked</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {today?.hoursWorked || 0} hrs
+                  {formatHours(today?.hoursWorked)}
                 </p>
               </div>
               <div className="bg-gray-50 rounded-lg p-4">
@@ -395,17 +419,29 @@ function Dashboard() {
               </div>
               <div className="bg-gray-50 rounded-lg p-4">
                 <p className="text-sm text-gray-600 mb-1">Status</p>
-                <p
-                  className={`text-2xl font-bold capitalize ${
-                    today?.status === "present"
-                      ? "text-green-600"
-                      : today?.status === "late"
-                        ? "text-yellow-600"
-                        : "text-red-600"
-                  }`}
-                >
-                  {today?.status || "absent"}
-                </p>
+                {!today?.checkInTime && offLabel ? (
+                  <p className="text-2xl font-bold text-purple-700">
+                    {today?.holiday ? "Holiday" : "Weekly off"}
+                  </p>
+                ) : (
+                  <p
+                    className={`text-2xl font-bold capitalize ${
+                      today?.status === "present"
+                        ? "text-green-600"
+                        : today?.status === "late"
+                          ? "text-yellow-600"
+                          : "text-red-600"
+                    }`}
+                  >
+                    {today?.status || "absent"}
+                  </p>
+                )}
+                {today?.checkInTime && offLabel && (
+                  <p className="text-xs text-purple-700 mt-1">
+                    {today?.holiday ? "Holiday" : "Weekly off"} — all hours
+                    count as overtime
+                  </p>
+                )}
               </div>
             </div>
 
@@ -488,7 +524,7 @@ function Dashboard() {
               <div>
                 <p className="text-sm text-gray-600 mb-1">Avg Hours/Day</p>
                 <p className="text-3xl font-bold text-purple-600">
-                  {(stats?.averageHoursWorked || 0).toFixed(1)}h
+                  {formatHours(stats?.averageHoursWorked)}
                 </p>
               </div>
               <Calendar className="w-8 h-8 text-purple-600 opacity-20" />

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/db";
 import { generateResetToken, hashResetToken } from "@/lib/auth";
 import { sendPasswordResetEmail } from "@/lib/mailer";
+import { findUserByEmail } from "@/lib/users";
 import type { ForgotPasswordRequest, MessageResponse } from "@/types/api";
 
 export const runtime = "nodejs";
@@ -43,13 +44,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Email is required" }, { status: 400 });
     }
 
-    // Matched verbatim (bar surrounding whitespace) because signup stores the
-    // address as typed and login compares it exactly — lowercasing here would
-    // silently fail for anyone who signed up with capitals.
-    const lookupEmail = email.trim();
-
     const { db } = await connectToDatabase();
-    const user = await db.collection("users").findOne({ email: lookupEmail });
+    // Case-insensitive lookup; the link goes to the address on record.
+    const user = await findUserByEmail(db, email);
+    const lookupEmail: string = user?.email ?? email.trim();
 
     if (!user) {
       if (REVEAL_UNKNOWN_ACCOUNTS) {

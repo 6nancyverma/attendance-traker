@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/db";
 import { verifyPassword, generateToken } from "@/lib/auth";
+import { findUserByEmail } from "@/lib/users";
 import type { LoginRequest, AuthResponse } from "@/types/api";
 
 export const runtime = "nodejs";
@@ -18,10 +19,10 @@ export async function POST(req: NextRequest) {
     }
 
     const { db } = await connectToDatabase();
-    const usersCollection = db.collection("users");
 
-    // Find user
-    const user = await usersCollection.findOne({ email });
+    // Case-insensitive, so "Nancy@x.com" typed on a phone still finds the
+    // account that signed up as "nancy@x.com".
+    const user = await findUserByEmail(db, email);
     if (!user) {
       return NextResponse.json(
         { error: "Invalid credentials" },

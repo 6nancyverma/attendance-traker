@@ -8,6 +8,7 @@ import {
 } from "@/lib/date";
 import { ObjectId } from "mongodb";
 import { getStandardHours, normalizeSchedule } from "@/lib/work-schedule";
+import { normalizeHolidays } from "@/lib/holidays";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,20 +42,23 @@ export async function GET(req: NextRequest) {
     // A record only exists once you check in, so "absent" is never stored —
     // it is derived: working days already elapsed that have no record at all.
     let scheduleSource: unknown = null;
+    let holidaysSource: unknown = null;
     let userCreatedAt: Date | null = null;
     try {
       const userRecord = await db
         .collection("users")
         .findOne(
           { _id: new ObjectId(user._id) },
-          { projection: { workSchedule: 1, createdAt: 1 } },
+          { projection: { workSchedule: 1, holidays: 1, createdAt: 1 } },
         );
       scheduleSource = userRecord?.workSchedule ?? null;
+      holidaysSource = userRecord?.holidays ?? null;
       userCreatedAt = userRecord?.createdAt ?? null;
     } catch {
       // Fall through to defaults.
     }
     const schedule = normalizeSchedule(scheduleSource);
+    const holidays = normalizeHolidays(holidaysSource);
 
     // Days marked leave/sick/holiday are neither worked nor absent — they are
     // accounted for, so they must not inflate the absence count.
@@ -77,6 +81,7 @@ export async function GET(req: NextRequest) {
       endDate,
       new Date(),
       schedule.workingDays,
+      holidays.map((h) => h.date),
     );
     const totalAbsent = Math.max(0, workingDaysElapsed - daysAttended);
 

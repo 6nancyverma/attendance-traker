@@ -4,6 +4,7 @@ import { connectToDatabase } from "@/lib/db";
 import { requireAuth } from "@/lib/api-auth";
 import {
   isValidTime,
+  MAX_BREAK_MINUTES,
   normalizeSchedule,
   type WorkSchedule,
 } from "@/lib/work-schedule";
@@ -90,6 +91,17 @@ export async function PUT(req: NextRequest) {
     ) {
       return NextResponse.json(
         { error: "graceMinutes must be between 0 and 240" },
+        { status: 400 }
+      );
+    }
+    if (
+      body.breakMinutes !== undefined &&
+      (!Number.isFinite(body.breakMinutes) ||
+        body.breakMinutes < 0 ||
+        body.breakMinutes > MAX_BREAK_MINUTES)
+    ) {
+      return NextResponse.json(
+        { error: `breakMinutes must be between 0 and ${MAX_BREAK_MINUTES}` },
         { status: 400 }
       );
     }

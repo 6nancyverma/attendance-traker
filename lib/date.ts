@@ -49,8 +49,10 @@ export function countWorkingDaysElapsed(
   startDate: string,
   endDate: string,
   today: Date = new Date(),
-  workingDays: number[] = [1, 2, 3, 4, 5]
+  workingDays: number[] = [1, 2, 3, 4, 5],
+  holidays: Iterable<string> = []
 ): number {
+  const skip = new Set(holidays);
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);
   const todayKey = toLocalDateKey(today);
@@ -64,7 +66,9 @@ export function countWorkingDaysElapsed(
   let count = 0;
   const cursor = new Date(start);
   while (cursor <= last) {
-    if (isWorkingDay(cursor, workingDays)) count += 1;
+    if (isWorkingDay(cursor, workingDays) && !skip.has(toLocalDateKey(cursor))) {
+      count += 1;
+    }
     cursor.setDate(cursor.getDate() + 1);
   }
   return count;

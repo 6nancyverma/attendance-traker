@@ -17,6 +17,12 @@ import {
   type WorkSchedule,
 } from "@/lib/work-schedule";
 import { Clock, LayoutDashboard, Menu, X } from "lucide-react";
+import {
+  isValidHolidayDate,
+  MAX_HOLIDAY_NAME,
+  normalizeHolidays,
+  type Holiday,
+} from "@/lib/holidays";
 
 function Settings() {
   const { user, token } = useAuth();
@@ -33,6 +39,80 @@ function Settings() {
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  // Holidays: paid days off that show in history and never count as absent.
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [holidayDate, setHolidayDate] = useState("");
+  const [holidayName, setHolidayName] = useState("");
+  const [isSavingHolidays, setIsSavingHolidays] = useState(false);
+  const [holidayError, setHolidayError] = useState<string | null>(null);
+
+  const loadHolidays = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch("/api/settings/holidays", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (res.ok) setHolidays(normalizeHolidays(await res.json()));
+    } catch {
+      // Leave the list empty; adding still works.
+    }
+  }, [token]);
+
+  useEffect(() => {
+    loadHolidays();
+  }, [loadHolidays]);
+
+  const addHoliday = () => {
+    setHolidayError(null);
+    if (!isValidHolidayDate(holidayDate)) {
+      setHolidayError("Pick a date for the holiday.");
+      return;
+    }
+    setHolidays((prev) =>
+      normalizeHolidays([
+        ...prev.filter((h) => h.date !== holidayDate),
+        { date: holidayDate, name: holidayName.trim() || "Holiday" },
+      ]),
+    );
+    setHolidayDate("");
+    setHolidayName("");
+  };
+
+  const removeHoliday = (date: string) => {
+    setHolidayError(null);
+    setHolidays((prev) => prev.filter((h) => h.date !== date));
+  };
+
+  const handleSaveHolidays = async () => {
+    setHolidayError(null);
+    setIsSavingHolidays(true);
+    try {
+      const res = await fetch("/api/settings/holidays", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ holidays }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setHolidayError(data.error || "Could not save your holidays.");
+        return;
+      }
+      setHolidays(normalizeHolidays(data));
+      toast({
+        title: "Holidays saved",
+        description: "They now show in history and count as paid days.",
+      });
+    } catch {
+      setHolidayError("An error occurred. Please try again.");
+    } finally {
+      setIsSavingHolidays(false);
+    }
+  };
 
   const loadSchedule = useCallback(async () => {
     if (!token) return;
@@ -289,6 +369,30 @@ function Settings() {
 
                 <div>
                   <label
+                    htmlFor="breakMinutes"
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                  >
+                    Break (min)
+                  </label>
+                  <Input
+                    id="breakMinutes"
+                    type="number"
+                    min={0}
+                    max={480}
+                    value={schedule.breakMinutes}
+                    onChange={(e) => {
+                      setScheduleError(null);
+                      setSchedule((p) => ({
+                        ...p,
+                        breakMinutes: Number(e.target.value),
+                      }));
+                    }}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <label
                     htmlFor="graceMinutes"
                     className="block text-sm font-medium text-gray-700 mb-2"
                   >
@@ -349,8 +453,13 @@ function Settings() {
                   is marked <strong>late</strong>.
                 </p>
                 <p className="mt-1">
-                  A standard day is{" "}
-                  <strong>{getStandardHours(schedule).toFixed(2)} hours</strong>
+                  <strong>{schedule.breakMinutes} minutes</strong> of break are
+                  deducted from every completed day. If you track more break
+                  time than that, the tracked amount is deducted instead.
+                </p>
+                <p className="mt-1">
+                  That makes a standard day{" "}
+                  <strong>{getStandardHours(schedule).toFixed(2)} working hours</strong>
                   {" "}— anything beyond that counts as overtime.
                 </p>
               </div>
@@ -370,6 +479,114 @@ function Settings() {
               </Button>
             </form>
           )}
+        </Card>
+
+        <Card className="p-6 bg-white mb-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Holidays</h2>
+          <p className="text-sm text-gray-600 mb-6">
+            Public holidays are paid days off. They appear in your history,
+            are never counted as absent, and any hours you work on one count
+            as overtime.
+          </p>
+
+          <div className="flex flex-wrap items-end gap-3 mb-4">
+            <div>
+              <label
+                htmlFor="holiday-date"
+                className="block text-sm font-medium text-gray-700 mb-2"
+              >
+                Date
+              </label>
+              <Input
+                id="holiday-date"
+                type="date"
+                value={holidayDate}
+                onChange={(e) => {
+                  setHolidayError(null);
+                  setHolidayDate(e.target.value);
+                }}
+                className="w-auto"
+              />
+            </div>
+            <div className="flex-1 min-w-[180px]">
+              <label
+                htmlFor="holiday-name"
+                className="block text-sm font-medium text-gray-700 mb-2"
+              >
+                Name
+              </label>
+              <Input
+                id="holiday-name"
+                value={holidayName}
+                maxLength={MAX_HOLIDAY_NAME}
+                placeholder="e.g. Diwali"
+                onChange={(e) => {
+                  setHolidayError(null);
+                  setHolidayName(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addHoliday();
+                  }
+                }}
+                className="w-full"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={addHoliday}
+              className="!w-auto"
+            >
+              Add
+            </Button>
+          </div>
+
+          {holidays.length === 0 ? (
+            <p className="text-sm text-gray-500 mb-4">No holidays yet.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100 rounded-md border border-gray-200 mb-4">
+              {holidays.map((h) => (
+                <li
+                  key={h.date}
+                  className="flex items-center justify-between px-4 py-2 text-sm"
+                >
+                  <span>
+                    <span className="font-medium text-gray-900">
+                      {new Date(`${h.date}T00:00:00`).toLocaleDateString(
+                        "en-US",
+                        { weekday: "short", day: "numeric", month: "short", year: "numeric" },
+                      )}
+                    </span>
+                    <span className="ml-3 text-gray-600">{h.name}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeHoliday(h.date)}
+                    className="text-red-600 hover:underline"
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {holidayError && (
+            <p role="alert" className="text-sm text-red-600 mb-3">
+              {holidayError}
+            </p>
+          )}
+
+          <Button
+            type="button"
+            onClick={handleSaveHolidays}
+            disabled={isSavingHolidays}
+            className="!w-full sm:!w-auto bg-blue-600 hover:bg-blue-700"
+          >
+            {isSavingHolidays ? "Saving..." : "Save holidays"}
+          </Button>
         </Card>
 
         <Card className="p-6 bg-white">

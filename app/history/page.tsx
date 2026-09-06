@@ -22,8 +22,20 @@ import {
   DAY_TYPES,
   DAY_TYPE_LABELS,
   formatDuration,
+  formatHours,
+  isWeeklyOff,
+  splitHours,
+  standardHoursForDate,
   type DayType,
 } from "@/lib/attendance";
+import {
+  DEFAULT_WORK_SCHEDULE,
+  getStandardHours,
+  normalizeSchedule,
+  type WorkSchedule,
+} from "@/lib/work-schedule";
+import { isWorkingDay, toLocalDateKey } from "@/lib/date";
+import { findHoliday, normalizeHolidays, type Holiday } from "@/lib/holidays";
 
 const MONTHS = [
   "January",
@@ -62,6 +74,17 @@ function formatDate(dateKey: string): { weekday: string; label: string } {
   };
 }
 
+/**
+ * Local "HH:MM" on a given day → exact ISO instant, using the browser's
+ * timezone. The server can't do this: it may sit in another timezone.
+ * Empty input → empty string, which tells the API to clear the time.
+ */
+function toInstant(dateKey: string, time: string): string {
+  if (!time) return "";
+  const d = new Date(`${dateKey}T${time}:00`);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+}
+
 /** ISO timestamp → local "HH:MM" for the edit inputs. */
 function toTimeInput(iso?: string): string {
   if (!iso) return "";
@@ -72,12 +95,28 @@ function toTimeInput(iso?: string): string {
   ).padStart(2, "0")}`;
 }
 
-function StatusBadge({ record }: { record: AttendanceRecord }) {
+function StatusBadge({
+  record,
+  offLabel,
+}: {
+  record: AttendanceRecord;
+  /** "Weekly off" or the holiday's name when the date is a paid day off. */
+  offLabel: string | null;
+}) {
   const dayType = record.dayType ?? "work";
   if (dayType !== "work" && dayType !== "wfh") {
     return (
       <span className="inline-flex items-center rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-medium text-purple-700">
         {DAY_TYPE_LABELS[dayType]}
+      </span>
+    );
+  }
+  // A Sunday or a holiday with nothing recorded is a paid day off, not an
+  // absence.
+  if (offLabel && !record.checkInTime) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-medium text-purple-700">
+        {offLabel}
       </span>
     );
   }
@@ -112,6 +151,11 @@ function History() {
   const [month, setMonth] = useState<number | "all">(now.getMonth() + 1);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // The user's schedule decides the day length (overtime threshold) and
+  // which weekdays are working days (the rest are weekly offs).
+  const [schedule, setSchedule] = useState<WorkSchedule>(DEFAULT_WORK_SCHEDULE);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const standardHours = getStandardHours(schedule);
   const { token } = useAuth();
   const { toast } = useToast();
 
@@ -156,6 +200,40 @@ function History() {
     fetchHistory();
   }, [fetchHistory]);
 
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch("/api/settings/schedule", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((raw) => {
+        if (!cancelled && raw) {
+          setSchedule(normalizeSchedule(raw));
+        }
+      })
+      .catch(() => {
+        // Keep the default day length; the table still renders.
+      });
+    fetch("/api/settings/holidays", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((raw) => {
+        if (!cancelled && raw) {
+          setHolidays(normalizeHolidays(raw));
+        }
+      })
+      .catch(() => {
+        // No holiday list: nothing extra to show.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   const openEditor = (record: AttendanceRecord) => {
     setEditingDate(record.date);
     setDraft({
@@ -175,7 +253,12 @@ function History() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ date, ...draft }),
+        body: JSON.stringify({
+          date,
+          ...draft,
+          checkInAt: toInstant(date, draft.checkIn),
+          checkOutAt: toInstant(date, draft.checkOut),
+        }),
       });
       const data = await res.json();
 
@@ -230,6 +313,62 @@ function History() {
 
   const completed = records.filter((r) => typeof r.hoursWorked === "number");
   const totalHours = completed.reduce((s, r) => s + (r.hoursWorked || 0), 0);
+  const splitFor = (r: AttendanceRecord) =>
+    splitHours(
+      r.hoursWorked || 0,
+      standardHoursForDate(r.date, schedule, holidays),
+    );
+  const totalRegular = completed.reduce((s, r) => s + splitFor(r).regular, 0);
+  const totalOvertime = completed.reduce((s, r) => s + splitFor(r).overtime, 0);
+
+  /** "Weekly off", the holiday's name, or null for a working day. */
+  const offLabelFor = (dateKey: string): string | null => {
+    const holiday = findHoliday(dateKey, holidays);
+    if (holiday) return holiday.name;
+    return isWeeklyOff(dateKey, schedule) ? "Weekly off" : null;
+  };
+
+  // Paid days off (weekly offs and holidays) that have already passed in the
+  // selected range and have no record of their own. They count towards paid
+  // days — a Sunday is paid even though nobody checks in — and in the month
+  // view they are listed so the month reads like a calendar.
+  const offDays: AttendanceRecord[] = (() => {
+    const known = new Set(records.map((r) => r.date));
+    const todayKey = toLocalDateKey(now);
+    const first =
+      month === "all" ? new Date(year, 0, 1) : new Date(year, month - 1, 1);
+    const last =
+      month === "all" ? new Date(year, 11, 31) : new Date(year, month, 0);
+    const extra: AttendanceRecord[] = [];
+    for (
+      const cursor = new Date(first);
+      cursor <= last;
+      cursor.setDate(cursor.getDate() + 1)
+    ) {
+      const key = toLocalDateKey(cursor);
+      if (key > todayKey) break;
+      if (known.has(key)) continue;
+      if (
+        !isWorkingDay(cursor, schedule.workingDays) ||
+        findHoliday(key, holidays)
+      ) {
+        extra.push({ _id: "", userId: "", date: key, status: "absent" });
+      }
+    }
+    return extra;
+  })();
+
+  const workedDays = records.filter((r) => r.checkInTime).length;
+  const markedDays = records.length - workedDays; // leave / sick / holiday marks
+  const paidDays = records.length + offDays.length;
+
+  const displayRows: AttendanceRecord[] =
+    month === "all" || offDays.length === 0
+      ? records
+      : [...records, ...offDays].sort((a, b) =>
+          a.date < b.date ? 1 : a.date > b.date ? -1 : 0,
+        );
+  const totalBreak = completed.reduce((s, r) => s + (r.breakMinutes || 0), 0);
   const openDays = records.filter(
     (r) => r.checkInTime && !r.checkOutTime,
   ).length;
@@ -366,15 +505,33 @@ function History() {
         </Card>
 
         {/* Summary */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
           <Card className="p-4 bg-white">
-            <p className="text-sm text-gray-600 mb-1">Days recorded</p>
-            <p className="text-2xl font-bold text-gray-900">{records.length}</p>
+            <p className="text-sm text-gray-600 mb-1">Paid days</p>
+            <p className="text-2xl font-bold text-gray-900">{paidDays}</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {workedDays} worked · {offDays.length} off/holiday
+              {markedDays > 0 && ` · ${markedDays} leave`}
+            </p>
           </Card>
           <Card className="p-4 bg-white">
             <p className="text-sm text-gray-600 mb-1">Total hours</p>
             <p className="text-2xl font-bold text-blue-600">
-              {totalHours.toFixed(1)}h
+              {formatHours(totalHours)}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              {formatHours(totalRegular)} working ·{" "}
+              {formatHours(totalOvertime)} overtime
+            </p>
+          </Card>
+          <Card className="p-4 bg-white">
+            <p className="text-sm text-gray-600 mb-1">Overtime hours</p>
+            <p className="text-2xl font-bold text-blue-600">
+              {formatHours(totalOvertime)}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              Beyond {formatHours(standardHours)} a day · all hours on a
+              weekly off or holiday
             </p>
           </Card>
           <Card className="p-4 bg-white">
@@ -536,7 +693,16 @@ function History() {
                       Check out
                     </th>
                     <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Hours
+                      Break
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                      Working hours
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                      Overtime hours
+                    </th>
+                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                      Total hours
                     </th>
                     <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Status
@@ -547,9 +713,12 @@ function History() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {records.map((record) => {
+                  {displayRows.map((record) => {
                     const { weekday, label } = formatDate(record.date);
                     const isEditing = editingDate === record.date;
+                    const hasHours = typeof record.hoursWorked === "number";
+                    const offLabel = offLabelFor(record.date);
+                    const split = hasHours ? splitFor(record) : null;
                     return (
                       <Fragment key={record._id || record.date}>
                         <tr className="hover:bg-gray-50">
@@ -568,6 +737,14 @@ function History() {
                                 edited
                               </span>
                             )}
+                            {offLabel && record.checkInTime && (
+                              <span
+                                title="Paid day off — all hours count as overtime"
+                                className="ml-2 text-xs text-purple-600"
+                              >
+                                {offLabel.toLowerCase()}
+                              </span>
+                            )}
                           </td>
                           <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
                             {formatTime(record.checkInTime)}
@@ -576,22 +753,25 @@ function History() {
                             {formatTime(record.checkOutTime)}
                           </td>
                           <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
-                            {typeof record.hoursWorked === "number"
-                              ? `${record.hoursWorked.toFixed(2)}h`
-                              : "—"}
-                            {record.isOvertime && (
-                              <span className="ml-2 text-xs font-medium text-blue-600">
-                                OT
-                              </span>
-                            )}
-                            {!!record.breakMinutes && (
-                              <span className="ml-2 text-xs text-gray-500">
-                                ({formatDuration(record.breakMinutes)} break)
-                              </span>
-                            )}
+                            {hasHours ? formatDuration(record.breakMinutes || 0) : "—"}
+                          </td>
+                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
+                            {formatHours(split?.regular)}
+                          </td>
+                          <td
+                            className={`px-6 py-4 whitespace-nowrap ${
+                              split && split.overtime > 0
+                                ? "font-medium text-blue-600"
+                                : "text-gray-400"
+                            }`}
+                          >
+                            {formatHours(split?.overtime)}
+                          </td>
+                          <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
+                            {formatHours(record.hoursWorked)}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <StatusBadge record={record} />
+                            <StatusBadge record={record} offLabel={offLabel} />
                           </td>
                           <td className="px-6 py-4 text-right whitespace-nowrap">
                             <button
@@ -610,7 +790,7 @@ function History() {
 
                         {isEditing && (
                           <tr className="bg-blue-50/40">
-                            <td colSpan={6} className="px-6 py-5">
+                            <td colSpan={9} className="px-6 py-5">
                               <div className="flex flex-wrap items-end gap-3">
                                 <div>
                                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -697,14 +877,16 @@ function History() {
                                 >
                                   {isSaving ? "Saving..." : "Save"}
                                 </Button>
-                                <Button
-                                  variant="outline"
-                                  onClick={() => deleteDay(record.date)}
-                                  disabled={isSaving}
-                                  className="!w-auto text-red-600 hover:text-red-700"
-                                >
-                                  Delete
-                                </Button>
+                                {record._id && (
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => deleteDay(record.date)}
+                                    disabled={isSaving}
+                                    className="!w-auto text-red-600 hover:text-red-700"
+                                  >
+                                    Delete
+                                  </Button>
+                                )}
                               </div>
                               {record.note && !isSaving && (
                                 <p className="mt-3 text-xs text-gray-500">
@@ -718,6 +900,29 @@ function History() {
                     );
                   })}
                 </tbody>
+                <tfoot className="bg-gray-50 border-t border-gray-200">
+                  <tr>
+                    <td
+                      colSpan={3}
+                      className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600"
+                    >
+                      Total · {paidDays} paid {paidDays === 1 ? "day" : "days"}
+                    </td>
+                    <td className="px-6 py-3 font-semibold text-gray-700 whitespace-nowrap">
+                      {formatDuration(totalBreak)}
+                    </td>
+                    <td className="px-6 py-3 font-semibold text-gray-900 whitespace-nowrap">
+                      {formatHours(totalRegular)}
+                    </td>
+                    <td className="px-6 py-3 font-semibold text-blue-600 whitespace-nowrap">
+                      {formatHours(totalOvertime)}
+                    </td>
+                    <td className="px-6 py-3 font-semibold text-gray-900 whitespace-nowrap">
+                      {formatHours(totalHours)}
+                    </td>
+                    <td colSpan={2} />
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}
