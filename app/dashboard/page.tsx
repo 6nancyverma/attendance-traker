@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,17 @@ function Dashboard() {
   const router = useRouter();
   const { toast } = useToast();
   const { user, token, logout } = useAuth();
+  const headerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -237,11 +248,11 @@ function Dashboard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
+      <header ref={headerRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-900">
+            <span className="text-lg font-bold text-gray-900">
               AttendanceApp
             </span>
           </div>
@@ -292,7 +303,7 @@ function Dashboard() {
 
         {/* Mobile Navigation */}
         {isMobileMenuOpen && (
-          <div className="md:hidden bg-white border-t border-gray-100 shadow-lg">
+          <div className="md:hidden absolute top-full left-0 w-full bg-white border-t border-gray-100 shadow-lg">
             <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
               <span className="text-sm text-gray-600 py-2 px-4 font-medium">
                 Welcome, {user?.name}
@@ -334,13 +345,13 @@ function Dashboard() {
         )}
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-8 lg:py-12">
         {/* Today's Attendance Card */}
         <div className="mb-8">
-          <Card className="p-4 lg:p-8 bg-white">
+          <Card className="px-2 py-4 lg:p-8 bg-white">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
               <div>
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">
+                <h1 className="text-lg font-bold text-gray-900 mb-2">
                   Today&apos;s Attendance
                 </h1>
                 <p className="text-gray-600">
@@ -392,33 +403,33 @@ function Dashboard() {
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-              <div className="bg-gray-50 rounded-lg p-4">
+              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
                 <p className="text-sm text-gray-600 mb-1">Check In Time</p>
-                <p className="text-2xl font-bold text-gray-900">
+                <p className="text-lg font-bold text-gray-900">
                   {formatTime(today?.checkInTime)}
                 </p>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4">
+              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
                 <p className="text-sm text-gray-600 mb-1">Check Out Time</p>
-                <p className="text-2xl font-bold text-gray-900">
+                <p className="text-lg font-bold text-gray-900">
                   {formatTime(today?.checkOutTime)}
                 </p>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4">
+              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
                 <p className="text-sm text-gray-600 mb-1">Hours Worked</p>
-                <p className="text-2xl font-bold text-gray-900">
+                <p className="text-lg font-bold text-gray-900">
                   {formatHours(today?.hoursWorked)}
                 </p>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4">
+              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
                 <p className="text-sm text-gray-600 mb-1">Break Time</p>
-                <p className="text-2xl font-bold text-gray-900">
+                <p className="text-lg font-bold text-gray-900">
                   {formatDuration(
                     today?.breakMinutes ?? totalBreakMinutes(today?.breaks),
                   )}
                 </p>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4">
+              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
                 <p className="text-sm text-gray-600 mb-1">Status</p>
                 {!today?.checkInTime && offLabel ? (
                   <p className="text-2xl font-bold text-purple-700">
@@ -472,11 +483,11 @@ function Dashboard() {
 
         {/* Statistics */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          <Card className="p-6 bg-white">
+          <Card className="p-3 lg:p-6 bg-white">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Present Days</p>
-                <p className="text-3xl font-bold text-green-600">
+                <p className="text-lg font-bold text-green-600">
                   {stats?.totalPresent || 0}
                 </p>
               </div>
@@ -484,11 +495,11 @@ function Dashboard() {
             </div>
           </Card>
 
-          <Card className="p-6 bg-white">
+          <Card className="p-3 lg:p-6 bg-white">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Late Days</p>
-                <p className="text-3xl font-bold text-yellow-600">
+                <p className="text-lg font-bold text-yellow-600">
                   {stats?.totalLate || 0}
                 </p>
               </div>
@@ -496,11 +507,11 @@ function Dashboard() {
             </div>
           </Card>
 
-          <Card className="p-6 bg-white">
+          <Card className="p-3 lg:p-6 bg-white">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Absent Days</p>
-                <p className="text-3xl font-bold text-red-600">
+                <p className="text-lg font-bold text-red-600">
                   {stats?.totalAbsent || 0}
                 </p>
               </div>
@@ -508,11 +519,11 @@ function Dashboard() {
             </div>
           </Card>
 
-          <Card className="p-6 bg-white">
+          <Card className="p-3 lg:p-6 bg-white">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Overtime Hours</p>
-                <p className="text-3xl font-bold text-blue-600">
+                <p className="text-lg font-bold text-blue-600">
                   {formatHours(stats?.totalOvertimeHours)}
                 </p>
                 <p className="text-xs text-gray-500 mt-1">
@@ -524,11 +535,11 @@ function Dashboard() {
             </div>
           </Card>
 
-          <Card className="p-6 bg-white">
+          <Card className="p-3 lg:p-6 bg-white">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Avg Hours/Day</p>
-                <p className="text-3xl font-bold text-purple-600">
+                <p className="text-lg font-bold text-purple-600">
                   {formatHours(stats?.averageHoursWorked)}
                 </p>
               </div>

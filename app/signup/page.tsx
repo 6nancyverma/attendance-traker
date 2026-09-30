@@ -70,18 +70,18 @@ function SignupForm() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center py-12 px-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center py-8 lg:py-12 px-4">
       <div className="w-full max-w-md">
         <div className="bg-white rounded-lg shadow-lg p-4 lg:p-8">
           {/* Logo */}
           <div className="flex items-center justify-center gap-2 mb-8">
             <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-2xl font-bold text-gray-900">
+            <span className="text-xl font-bold text-gray-900">
               AttendanceApp
             </span>
           </div>
 
-          <h2 className="text-2xl font-bold text-gray-900 mb-2 text-center">
+          <h2 className="text-xl font-bold text-gray-900 mb-2 text-center">
             Create Account
           </h2>
           <p className="text-gray-600 text-center mb-8">

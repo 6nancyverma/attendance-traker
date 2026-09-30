@@ -28,6 +28,7 @@ const DEFAULTS = {
   graceMinutes: 0,
   workingDays: [1, 2, 3, 4, 5],
   breakMinutes: 30,
+  overtimeGraceMinutes: 10,
 };
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const toMinutes = (t) => {
@@ -48,7 +49,18 @@ function normalizeSchedule(raw) {
     v.workingDays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)
       ? v.workingDays
       : DEFAULTS.workingDays;
-  return { startTime, endTime, breakMinutes, workingDays };
+  const overtimeGraceMinutes =
+    Number.isFinite(v.overtimeGraceMinutes) &&
+    v.overtimeGraceMinutes >= 0 &&
+    v.overtimeGraceMinutes <= 240
+      ? Math.round(v.overtimeGraceMinutes)
+      : DEFAULTS.overtimeGraceMinutes;
+  return { startTime, endTime, breakMinutes, workingDays, overtimeGraceMinutes };
+}
+/** Overtime only once the day runs past its expected length by more than the grace. */
+function isOvertime(hoursWorked, standard, graceMinutes) {
+  if (standard <= 0) return hoursWorked > 0;
+  return Math.round((hoursWorked - standard) * 60) > graceMinutes;
 }
 /** Expected hours on a date: zero on a weekly off or holiday, so any work is overtime. */
 function standardHoursForDate(dateKey, s, holidays) {
@@ -84,7 +96,11 @@ function recompute(record, schedule, holidays) {
   return {
     hoursWorked,
     breakMinutes,
-    isOvertime: hoursWorked > standardHoursForDate(record.date, schedule, holidays),
+    isOvertime: isOvertime(
+      hoursWorked,
+      standardHoursForDate(record.date, schedule, holidays),
+      schedule.overtimeGraceMinutes
+    ),
   };
 }
 

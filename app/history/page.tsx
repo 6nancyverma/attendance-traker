@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,6 +8,13 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { RequireAuth } from "@/components/require-auth";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Calendar,
   Clock,
@@ -25,8 +32,7 @@ import {
   formatDuration,
   formatHours,
   isWeeklyOff,
-  splitHours,
-  standardHoursForDate,
+  splitHoursForDate,
   type DayType,
 } from "@/lib/attendance";
 import {
@@ -173,6 +179,17 @@ function History() {
   const [addDate, setAddDate] = useState("");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   /** Download the CSV report for whatever the filters currently show. */
   const downloadCsv = async () => {
@@ -363,10 +380,7 @@ function History() {
   const completed = records.filter((r) => typeof r.hoursWorked === "number");
   const totalHours = completed.reduce((s, r) => s + (r.hoursWorked || 0), 0);
   const splitFor = (r: AttendanceRecord) =>
-    splitHours(
-      r.hoursWorked || 0,
-      standardHoursForDate(r.date, schedule, holidays),
-    );
+    splitHoursForDate(r.hoursWorked || 0, r.date, schedule, holidays);
   const totalRegular = completed.reduce((s, r) => s + splitFor(r).regular, 0);
   const totalOvertime = completed.reduce((s, r) => s + splitFor(r).overtime, 0);
 
@@ -426,7 +440,7 @@ function History() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
+      <header ref={headerRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock className="w-8 h-8 text-blue-600" />
@@ -474,7 +488,7 @@ function History() {
 
         {/* Mobile Navigation */}
         {isMobileMenuOpen && (
-          <div className="md:hidden bg-white border-t border-gray-100 shadow-lg">
+          <div className="md:hidden absolute top-full left-0 w-full bg-white border-t border-gray-100 shadow-lg">
             <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
               <Link href="/dashboard">
                 <Button
@@ -508,7 +522,7 @@ function History() {
         )}
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">
           Attendance History
         </h1>
@@ -517,7 +531,7 @@ function History() {
         </p>
 
         {/* Filters */}
-        <Card className="p-4 bg-white mb-6">
+        <Card className="p-2 lg:p-4 bg-white mb-6">
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <label
@@ -526,23 +540,24 @@ function History() {
               >
                 Month
               </label>
-              <select
-                id="history-month"
-                value={month}
-                onChange={(e) =>
-                  setMonth(
-                    e.target.value === "all" ? "all" : Number(e.target.value),
-                  )
+              <Select
+                value={month.toString()}
+                onValueChange={(val) =>
+                  setMonth(val === "all" ? "all" : Number(val))
                 }
-                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
               >
-                <option value="all">Whole year</option>
-                {MONTHS.map((m, i) => (
-                  <option key={m} value={i + 1}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="history-month" className="w-[140px] h-10">
+                  <SelectValue placeholder="Select month" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Whole year</SelectItem>
+                  {MONTHS.map((m, i) => (
+                    <SelectItem key={m} value={String(i + 1)}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
@@ -552,18 +567,21 @@ function History() {
               >
                 Year
               </label>
-              <select
-                id="history-year"
-                value={year}
-                onChange={(e) => setYear(Number(e.target.value))}
-                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              <Select
+                value={year.toString()}
+                onValueChange={(val) => setYear(Number(val))}
               >
-                {years.map((y) => (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="history-year" className="w-[100px] h-10">
+                  <SelectValue placeholder="Select year" />
+                </SelectTrigger>
+                <SelectContent>
+                  {years.map((y) => (
+                    <SelectItem key={y} value={y.toString()}>
+                      {y}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="sm:ml-auto">
@@ -582,15 +600,15 @@ function History() {
 
         {/* Summary */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-          <Card className="p-4 bg-white">
+          <Card className="p-2 lg:p-4 bg-white">
             <p className="text-sm text-gray-600 mb-1">Paid days</p>
-            <p className="text-2xl font-bold text-gray-900">{paidDays}</p>
+            <p className="text-xl font-bold text-gray-900">{paidDays}</p>
             <p className="text-xs text-gray-500 mt-1">
               {workedDays} worked · {offDays.length} off/holiday
               {markedDays > 0 && ` · ${markedDays} leave`}
             </p>
           </Card>
-          <Card className="p-4 bg-white">
+          <Card className="p-2 lg:p-4 bg-white">
             <p className="text-sm text-gray-600 mb-1">Total hours</p>
             <p className="text-2xl font-bold text-blue-600">
               {formatHours(totalHours)}
@@ -600,23 +618,25 @@ function History() {
               {formatHours(totalOvertime)} overtime
             </p>
           </Card>
-          <Card className="p-4 bg-white">
+          <Card className="p-2 lg:p-4 bg-white">
             <p className="text-sm text-gray-600 mb-1">Overtime hours</p>
             <p className="text-2xl font-bold text-blue-600">
               {formatHours(totalOvertime)}
             </p>
             <p className="text-xs text-gray-500 mt-1">
-              Beyond {formatHours(standardHours)} a day · all hours on a
-              weekly off or holiday
+              Beyond {formatHours(standardHours)} a day
+              {schedule.overtimeGraceMinutes > 0 &&
+                ` by more than ${schedule.overtimeGraceMinutes}m`}{" "}
+              · all hours on a weekly off or holiday
             </p>
           </Card>
-          <Card className="p-4 bg-white">
+          <Card className="p-2 lg:p-4 bg-white">
             <p className="text-sm text-gray-600 mb-1">Late days</p>
             <p className="text-2xl font-bold text-yellow-600">
               {records.filter((r) => r.status === "late").length}
             </p>
           </Card>
-          <Card className="p-4 bg-white">
+          <Card className="p-2 lg:p-4 bg-white">
             <p className="text-sm text-gray-600 mb-1">Missing check-out</p>
             <p className="text-2xl font-bold text-orange-600">{openDays}</p>
             {openDays > 0 && (
@@ -628,7 +648,7 @@ function History() {
         {/* Add a day */}
         <div className="mb-4">
           {showAdd ? (
-            <Card className="p-4 bg-white">
+            <Card className="p-2 lg:p-4 bg-white">
               <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label
@@ -652,23 +672,26 @@ function History() {
                   >
                     Type
                   </label>
-                  <select
-                    id="add-type"
+                  <Select
                     value={draft.dayType}
-                    onChange={(e) =>
+                    onValueChange={(val) =>
                       setDraft((d) => ({
                         ...d,
-                        dayType: e.target.value as DayType,
+                        dayType: val as DayType,
                       }))
                     }
-                    className="h-10 rounded-md border border-input bg-background px-3 text-sm"
                   >
-                    {DAY_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {DAY_TYPE_LABELS[t]}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger id="add-type" className="w-[130px] h-10">
+                      <SelectValue placeholder="Select type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DAY_TYPES.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {DAY_TYPE_LABELS[t]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 {(draft.dayType === "work" || draft.dayType === "wfh") && (
                   <>
@@ -755,35 +778,38 @@ function History() {
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            // `relative` keeps the sr-only header label (absolutely positioned)
+            // inside this scroll area; without it the label sits at the far
+            // right of the wide table and makes the whole page scroll sideways.
+            <div className="relative overflow-x-auto">
               <table className="w-full text-left">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Date
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Check in
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Check out
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Break
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Working hours
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Overtime hours
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Total hours
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       Status
                     </th>
-                    <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>
@@ -798,21 +824,21 @@ function History() {
                     return (
                       <Fragment key={record._id || record.date}>
                         <tr className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap">
+                          <td className="px-2 lg:px-6 py-4 whitespace-nowrap">
                             <span className="font-medium text-gray-900">
                               {label}
                             </span>
                             <span className="ml-2 text-xs text-gray-500">
                               {weekday}
                             </span>
-                            {record.correctedManually && (
+                            {/* {record.correctedManually && (
                               <span
                                 title="Edited by hand"
                                 className="ml-2 text-xs text-gray-400"
                               >
                                 edited
                               </span>
-                            )}
+                            )} */}
                             {offLabel && record.checkInTime && (
                               <span
                                 title="Paid day off — all hours count as overtime"
@@ -835,7 +861,7 @@ function History() {
                             {formatHours(split?.regular)}
                           </td>
                           <td
-                            className={`px-6 py-4 whitespace-nowrap ${
+                            className={`px-2 lg:px-6 py-4 whitespace-nowrap ${
                               split && split.overtime > 0
                                 ? "font-medium text-blue-600"
                                 : "text-gray-400"
@@ -846,7 +872,7 @@ function History() {
                           <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
                             {formatHours(record.hoursWorked)}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
+                          <td className="px-2 lg:px-6 py-4 whitespace-nowrap">
                             <StatusBadge record={record} offLabel={offLabel} />
                           </td>
                           <td className="px-6 py-4 text-right whitespace-nowrap">
@@ -872,22 +898,26 @@ function History() {
                                   <label className="block text-sm font-medium text-gray-700 mb-1">
                                     Type
                                   </label>
-                                  <select
+                                  <Select
                                     value={draft.dayType}
-                                    onChange={(e) =>
+                                    onValueChange={(val) =>
                                       setDraft((d) => ({
                                         ...d,
-                                        dayType: e.target.value as DayType,
+                                        dayType: val as DayType,
                                       }))
                                     }
-                                    className="h-10 rounded-md border border-input bg-background px-3 text-sm"
                                   >
-                                    {DAY_TYPES.map((t) => (
-                                      <option key={t} value={t}>
-                                        {DAY_TYPE_LABELS[t]}
-                                      </option>
-                                    ))}
-                                  </select>
+                                    <SelectTrigger className="w-[130px] h-10">
+                                      <SelectValue placeholder="Select type" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {DAY_TYPES.map((t) => (
+                                        <SelectItem key={t} value={t}>
+                                          {DAY_TYPE_LABELS[t]}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
                                 </div>
 
                                 {(draft.dayType === "work" ||

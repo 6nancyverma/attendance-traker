@@ -23,10 +23,18 @@ export interface WorkSchedule {
    * Tracked breaks longer than this replace it rather than stacking on top.
    */
   breakMinutes: number;
+  /**
+   * Minutes past the standard day that are still not overtime. Leaving a few
+   * minutes after office end is just a slow exit; only once a day runs over
+   * by more than this does the extra time count (and then all of it does).
+   */
+  overtimeGraceMinutes: number;
 }
 
 export const DEFAULT_BREAK_MINUTES = 30;
 export const MAX_BREAK_MINUTES = 480;
+export const DEFAULT_OVERTIME_GRACE_MINUTES = 10;
+export const MAX_OVERTIME_GRACE_MINUTES = 240;
 
 export const DEFAULT_WORK_SCHEDULE: WorkSchedule = {
   startTime: "09:00",
@@ -34,6 +42,7 @@ export const DEFAULT_WORK_SCHEDULE: WorkSchedule = {
   graceMinutes: 0,
   workingDays: [1, 2, 3, 4, 5],
   breakMinutes: DEFAULT_BREAK_MINUTES,
+  overtimeGraceMinutes: DEFAULT_OVERTIME_GRACE_MINUTES,
 };
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -76,10 +85,6 @@ export function isLateArrival(checkInAt: Date, schedule: WorkSchedule): boolean 
   return arrived > timeToMinutes(schedule.startTime) + schedule.graceMinutes;
 }
 
-export function isOvertime(hoursWorked: number, schedule: WorkSchedule): boolean {
-  return hoursWorked > getStandardHours(schedule);
-}
-
 /**
  * Coerce whatever is stored on the user document into a usable schedule,
  * falling back field-by-field so a partial or malformed value can't break
@@ -114,6 +119,14 @@ export function normalizeSchedule(raw: unknown): WorkSchedule {
       ? Math.round(value.breakMinutes)
       : DEFAULT_WORK_SCHEDULE.breakMinutes;
 
+  const overtimeGraceMinutes =
+    typeof value.overtimeGraceMinutes === "number" &&
+    Number.isFinite(value.overtimeGraceMinutes) &&
+    value.overtimeGraceMinutes >= 0 &&
+    value.overtimeGraceMinutes <= MAX_OVERTIME_GRACE_MINUTES
+      ? Math.round(value.overtimeGraceMinutes)
+      : DEFAULT_WORK_SCHEDULE.overtimeGraceMinutes;
+
   const workingDays =
     Array.isArray(value.workingDays) &&
     value.workingDays.length > 0 &&
@@ -121,7 +134,14 @@ export function normalizeSchedule(raw: unknown): WorkSchedule {
       ? Array.from(new Set(value.workingDays)).sort()
       : DEFAULT_WORK_SCHEDULE.workingDays;
 
-  return { startTime, endTime, graceMinutes, workingDays, breakMinutes };
+  return {
+    startTime,
+    endTime,
+    graceMinutes,
+    workingDays,
+    breakMinutes,
+    overtimeGraceMinutes,
+  };
 }
 
 export const DAY_LABELS = [

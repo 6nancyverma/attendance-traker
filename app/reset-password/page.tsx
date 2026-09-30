@@ -17,7 +17,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <div className="bg-white rounded-lg shadow-lg p-4 lg:p-8">
           <div className="flex items-center justify-center gap-2 mb-8">
             <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-2xl font-bold text-gray-900">
+            <span className="text-xl font-bold text-gray-900">
               AttendanceApp
             </span>
           </div>
@@ -42,7 +42,7 @@ function ResetPasswordForm() {
   if (!token) {
     return (
       <Shell>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2 text-center">
+        <h2 className="text-xl font-bold text-gray-900 mb-2 text-center">
           Invalid reset link
         </h2>
         <p className="text-gray-600 text-center mb-8">
@@ -116,7 +116,7 @@ function ResetPasswordForm() {
 
   return (
     <Shell>
-      <h2 className="text-2xl font-bold text-gray-900 mb-2 text-center">
+      <h2 className="text-xl font-bold text-gray-900 mb-2 text-center">
         Set a new password
       </h2>
       <p className="text-gray-600 text-center mb-8">

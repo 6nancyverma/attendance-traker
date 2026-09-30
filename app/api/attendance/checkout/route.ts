@@ -9,7 +9,7 @@ import {
   computeHoursWorked,
   effectiveBreakMinutes,
   getOpenBreak,
-  standardHoursForDate,
+  splitHoursForDate,
   type BreakEntry,
 } from "@/lib/attendance";
 
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
     );
     // On a weekly off the expected hours are zero, so it is all overtime.
     const isOvertime =
-      hoursWorked > standardHoursForDate(today, schedule, holidays);
+      splitHoursForDate(hoursWorked, today, schedule, holidays).overtime > 0;
 
     await attendanceCollection.updateOne(
       { _id: record._id },

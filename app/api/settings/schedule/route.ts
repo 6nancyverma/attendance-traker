@@ -5,6 +5,7 @@ import { requireAuth } from "@/lib/api-auth";
 import {
   isValidTime,
   MAX_BREAK_MINUTES,
+  MAX_OVERTIME_GRACE_MINUTES,
   normalizeSchedule,
   type WorkSchedule,
 } from "@/lib/work-schedule";
@@ -102,6 +103,19 @@ export async function PUT(req: NextRequest) {
     ) {
       return NextResponse.json(
         { error: `breakMinutes must be between 0 and ${MAX_BREAK_MINUTES}` },
+        { status: 400 }
+      );
+    }
+    if (
+      body.overtimeGraceMinutes !== undefined &&
+      (!Number.isFinite(body.overtimeGraceMinutes) ||
+        body.overtimeGraceMinutes < 0 ||
+        body.overtimeGraceMinutes > MAX_OVERTIME_GRACE_MINUTES)
+    ) {
+      return NextResponse.json(
+        {
+          error: `overtimeGraceMinutes must be between 0 and ${MAX_OVERTIME_GRACE_MINUTES}`,
+        },
         { status: 400 }
       );
     }

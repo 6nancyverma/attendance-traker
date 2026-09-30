@@ -4,12 +4,13 @@ import { requireAuth } from "@/lib/api-auth";
 import {
   countWorkingDaysElapsed,
   getDateRange,
+  isWorkingDay,
   toLocalDateKey,
 } from "@/lib/date";
 import { ObjectId } from "mongodb";
 import { getStandardHours, normalizeSchedule } from "@/lib/work-schedule";
 import { normalizeHolidays } from "@/lib/holidays";
-import { splitHours, standardHoursForDate } from "@/lib/attendance";
+import { splitHoursForDate } from "@/lib/attendance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -84,7 +85,38 @@ export async function GET(req: NextRequest) {
       schedule.workingDays,
       holidays.map((h) => h.date),
     );
-    const totalAbsent = Math.max(0, workingDaysElapsed - daysAttended);
+
+    // Absences are counted day by day rather than as elapsed − attended: that
+    // subtraction let today's check-in or a worked Sunday cancel out a missed
+    // day, and treated a saved day with no check-in as attended.
+    const holidayDates = new Set(holidays.map((h) => h.date));
+    const isExpectedDay = (dateKey: string) =>
+      isWorkingDay(new Date(`${dateKey}T00:00:00`), schedule.workingDays) &&
+      !holidayDates.has(dateKey);
+
+    // Saved working days without a check-in — what the history page shows
+    // as "absent".
+    const recordedAbsent = records.filter(
+      (r) =>
+        !r.checkInTime &&
+        (!r.dayType || r.dayType === "work" || r.dayType === "wfh") &&
+        isExpectedDay(r.date),
+    ).length;
+
+    // Working days already over that have no record at all.
+    const recordedDates = new Set(records.map((r) => r.date));
+    const todayKey = toLocalDateKey(new Date());
+    let unrecordedAbsent = 0;
+    for (
+      const cursor = new Date(`${effectiveStartDate}T00:00:00`);
+      ;
+      cursor.setDate(cursor.getDate() + 1)
+    ) {
+      const key = toLocalDateKey(cursor);
+      if (key > endDate || key >= todayKey) break;
+      if (!recordedDates.has(key) && isExpectedDay(key)) unrecordedAbsent += 1;
+    }
+    const totalAbsent = recordedAbsent + unrecordedAbsent;
 
     const withHours = records.filter((r) => typeof r.hoursWorked === "number");
     const totalHoursWorked = withHours.reduce(
@@ -94,13 +126,11 @@ export async function GET(req: NextRequest) {
 
     // Overtime hours: whatever each day ran past its expected length (all of
     // it on weekly offs and holidays), the same split the history page shows.
+    const overtimeFor = (r: (typeof records)[number]) =>
+      splitHoursForDate(r.hoursWorked || 0, r.date, schedule, holidays)
+        .overtime;
     const totalOvertimeHours = withHours.reduce(
-      (sum, r) =>
-        sum +
-        splitHours(
-          r.hoursWorked || 0,
-          standardHoursForDate(r.date, schedule, holidays),
-        ).overtime,
+      (sum, r) => sum + overtimeFor(r),
       0,
     );
 
@@ -108,7 +138,9 @@ export async function GET(req: NextRequest) {
       totalPresent: records.filter((r) => r.status === "present").length,
       totalAbsent,
       totalLate: records.filter((r) => r.status === "late").length,
-      totalOvertime: records.filter((r) => r.isOvertime).length,
+      // Derived rather than read from the stored flag, so days saved before
+      // the overtime grace existed are judged by the current rule too.
+      totalOvertime: withHours.filter((r) => overtimeFor(r) > 0).length,
       // Averaged over days that were actually completed (checked out), so an
       // in-progress day doesn't drag the average toward zero.
       averageHoursWorked: withHours.length

@@ -8,8 +8,7 @@ import { findHoliday, normalizeHolidays } from "@/lib/holidays";
 import {
   DAY_TYPE_LABELS,
   isWeeklyOff,
-  splitHours,
-  standardHoursForDate,
+  splitHoursForDate,
   type DayType,
 } from "@/lib/attendance";
 
@@ -172,7 +171,7 @@ export async function GET(req: NextRequest) {
         typeof record.hoursWorked === "number" ? record.hoursWorked : undefined;
       const split =
         hours !== undefined
-          ? splitHours(hours, standardHoursForDate(dateKey, schedule, holidays))
+          ? splitHoursForDate(hours, dateKey, schedule, holidays)
           : null;
 
       let status: string;
@@ -194,7 +193,7 @@ export async function GET(req: NextRequest) {
       }
 
       if (record.status === "late") lateDays += 1;
-      if (record.isOvertime) overtimeDays += 1;
+      if (split && split.overtime > 0) overtimeDays += 1;
       if (split) {
         totalRegular += split.regular;
         totalOvertime += split.overtime;

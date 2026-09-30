@@ -86,13 +86,6 @@ export function computeHoursWorked(
   return Math.round((netMinutes / 60) * 100) / 100;
 }
 
-export function isOvertimeFor(
-  hoursWorked: number,
-  schedule: WorkSchedule
-): boolean {
-  return hoursWorked > getStandardHours(schedule);
-}
-
 /** True when the date is not one of the schedule's working days (a weekly off). */
 export function isWeeklyOff(dateKey: string, schedule: WorkSchedule): boolean {
   const d = new Date(`${dateKey}T00:00:00`);
@@ -129,18 +122,42 @@ export function standardHoursForDate(
 /**
  * Split a day's hours into the regular portion (up to the scheduled day
  * length) and whatever ran over it.
+ *
+ * Running over by no more than `graceMinutes` is not overtime — checking out
+ * at 6:31 for a 6:30 finish is still a normal day, so those minutes stay in
+ * the regular portion. Past the grace, the whole overrun counts. Days with no
+ * expected hours (weekly offs, holidays) get no grace: all of it is overtime.
  */
 export function splitHours(
   hoursWorked: number,
-  standardHours: number
+  standardHours: number,
+  graceMinutes = 0
 ): { regular: number; overtime: number } {
   const total = Math.max(0, hoursWorked || 0);
   const cap = Math.max(0, standardHours || 0);
-  const regular = Math.min(total, cap);
+  // Compared in whole minutes: hours are stored to two decimals, so ten
+  // minutes over reads as 0.17h, a hair more than 10/60.
+  const overMinutes = Math.round((total - cap) * 60);
+  const withinGrace = cap > 0 && overMinutes <= Math.max(0, graceMinutes || 0);
+  const regular = withinGrace ? total : Math.min(total, cap);
   return {
     regular: Math.round(regular * 100) / 100,
     overtime: Math.round((total - regular) * 100) / 100,
   };
+}
+
+/** `splitHours` for a given date under the user's schedule and holidays. */
+export function splitHoursForDate(
+  hoursWorked: number,
+  dateKey: string,
+  schedule: WorkSchedule,
+  holidays: Holiday[] = []
+): { regular: number; overtime: number } {
+  return splitHours(
+    hoursWorked,
+    standardHoursForDate(dateKey, schedule, holidays),
+    schedule.overtimeGraceMinutes
+  );
 }
 
 /**

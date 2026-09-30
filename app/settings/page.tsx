@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -109,6 +109,17 @@ function Settings() {
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Holidays: paid days off that show in history and never count as absent.
   const [holidays, setHolidays] = useState<Holiday[]>([]);
@@ -310,7 +321,7 @@ function Settings() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
+      <header ref={headerRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock className="w-8 h-8 text-blue-600" />
@@ -346,7 +357,7 @@ function Settings() {
 
         {/* Mobile Navigation */}
         {isMobileMenuOpen && (
-          <div className="md:hidden bg-white border-t border-gray-100 shadow-lg">
+          <div className="md:hidden absolute top-full left-0 w-full bg-white border-t border-gray-100 shadow-lg">
             <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
               <Link href="/dashboard">
                 <Button variant="ghost" className="w-full justify-start text-gray-700 font-normal">
@@ -359,10 +370,10 @@ function Settings() {
         )}
       </header>
 
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
         <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
 
-        <Card className="p-6 bg-white mb-6">
+        <Card className="px-2 py-4 lg:p-6 bg-white mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">Profile</h2>
           <p className="text-sm text-gray-600 mb-6">
             Your name appears on the dashboard and in reports. Changing your
@@ -464,7 +475,7 @@ function Settings() {
           </form>
         </Card>
 
-        <Card className="p-6 bg-white mb-6">
+        <Card className="px-2 py-4 lg:p-6 bg-white mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">
             Work schedule
           </h2>
@@ -566,6 +577,30 @@ function Settings() {
                     className="w-full"
                   />
                 </div>
+
+                <div>
+                  <label
+                    htmlFor="overtimeGraceMinutes"
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                  >
+                    Overtime after (min)
+                  </label>
+                  <Input
+                    id="overtimeGraceMinutes"
+                    type="number"
+                    min={0}
+                    max={240}
+                    value={schedule.overtimeGraceMinutes}
+                    onChange={(e) => {
+                      setScheduleError(null);
+                      setSchedule((p) => ({
+                        ...p,
+                        overtimeGraceMinutes: Number(e.target.value),
+                      }));
+                    }}
+                    className="w-full"
+                  />
+                </div>
               </div>
 
               <div>
@@ -612,7 +647,16 @@ function Settings() {
                 <p className="mt-1">
                   That makes a standard day{" "}
                   <strong>{getStandardHours(schedule).toFixed(2)} working hours</strong>
-                  {" "}— anything beyond that counts as overtime.
+                  {" "}—{" "}
+                  {schedule.overtimeGraceMinutes > 0 ? (
+                    <>
+                      running over by more than{" "}
+                      <strong>{schedule.overtimeGraceMinutes} minutes</strong>{" "}
+                      counts as overtime; less than that is ignored.
+                    </>
+                  ) : (
+                    "anything beyond that counts as overtime."
+                  )}
                 </p>
               </div>
 
@@ -633,7 +677,7 @@ function Settings() {
           )}
         </Card>
 
-        <Card className="p-6 bg-white mb-6">
+        <Card className="px-2 py-4 lg:p-6 bg-white mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">Holidays</h2>
           <p className="text-sm text-gray-600 mb-6">
             Public holidays are paid days off. They appear in your history,
@@ -741,7 +785,7 @@ function Settings() {
           </Button>
         </Card>
 
-        <Card className="p-6 bg-white">
+        <Card className="px-2 py-4 lg:p-6 bg-white">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">
             Change password
           </h2>

@@ -12,7 +12,7 @@ import {
   computeHoursWorked,
   effectiveBreakMinutes,
   isDayType,
-  standardHoursForDate,
+  splitHoursForDate,
   type BreakEntry,
   type DayType,
 } from "@/lib/attendance";
@@ -260,7 +260,7 @@ export async function PUT(req: NextRequest) {
       set.checkOutTime = checkOutTime;
       set.hoursWorked = hoursWorked;
       set.isOvertime =
-        hoursWorked > standardHoursForDate(date, schedule, holidays);
+        splitHoursForDate(hoursWorked, date, schedule, holidays).overtime > 0;
       set.breakMinutes = Math.round(
         effectiveBreakMinutes(breaks, schedule.breakMinutes)
       );
