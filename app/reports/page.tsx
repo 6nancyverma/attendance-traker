@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { RequireAuth } from "@/components/require-auth";
+import { AppShell, PageHeader } from "@/components/app-shell";
 import {
   Select,
   SelectContent,
@@ -14,38 +13,127 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Clock, LogOut, Download, Calendar, Menu, X } from "lucide-react";
+import {
+  CalendarDays,
+  CalendarRange,
+  Check,
+  Clock,
+  Download,
+  FileText,
+  Loader2,
+  Printer,
+  type LucideIcon,
+} from "lucide-react";
+import { istYearMonth } from "@/lib/date";
+import type { ReportData } from "@/types/report";
+import { cn } from "@/lib/utils";
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function ReportCard({
+  icon: Icon,
+  title,
+  description,
+  accent,
+  includes,
+  children,
+  action,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  accent: "blue" | "emerald";
+  includes: string[];
+  children: ReactNode;
+  action: ReactNode;
+}) {
+  const accents = {
+    blue: {
+      icon: "from-blue-500 to-indigo-600 shadow-blue-500/30",
+      check: "text-blue-600 bg-blue-50",
+      bar: "from-blue-500 to-indigo-600",
+    },
+    emerald: {
+      icon: "from-emerald-500 to-teal-600 shadow-emerald-500/30",
+      check: "text-emerald-600 bg-emerald-50",
+      bar: "from-emerald-500 to-teal-600",
+    },
+  }[accent];
+
+  return (
+    <section className="relative flex flex-col overflow-hidden rounded-2xl border border-gray-100 bg-white p-5 shadow-sm sm:p-6">
+      <span
+        className={cn(
+          "absolute inset-x-0 top-0 h-1 bg-gradient-to-r",
+          accents.bar
+        )}
+      />
+      <div className="mb-4 flex items-start gap-4">
+        <span
+          className={cn(
+            "flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-lg",
+            accents.icon
+          )}
+        >
+          <Icon className="h-6 w-6" />
+        </span>
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+          <p className="text-sm text-gray-600">{description}</p>
+        </div>
+      </div>
+
+      <div className="mb-5">{children}</div>
+
+      <ul className="mb-6 space-y-2">
+        {includes.map((item) => (
+          <li key={item} className="flex items-start gap-2 text-sm text-gray-700">
+            <span
+              className={cn(
+                "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full",
+                accents.check
+              )}
+            >
+              <Check className="h-3 w-3" />
+            </span>
+            {item}
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-auto">{action}</div>
+    </section>
+  );
+}
 
 function Reports() {
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const router = useRouter();
+  const [monthlyYear, setMonthlyYear] = useState(() => istYearMonth().year);
+  const [selectedMonth, setSelectedMonth] = useState(() => istYearMonth().month);
+  const [yearlyYear, setYearlyYear] = useState(() => istYearMonth().year);
+  const [isDownloading, setIsDownloading] = useState<
+    "monthly" | "yearly" | null
+  >(null);
   const { toast } = useToast();
-  const { user, token, logout } = useAuth();
-  const headerRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
-        setIsMobileMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  const handleLogout = () => {
-    logout();
-    router.push("/");
-  };
+  const { token } = useAuth();
 
   const downloadReport = async (type: "monthly" | "yearly") => {
-    setIsDownloading(true);
+    setIsDownloading(type);
     try {
       const params = new URLSearchParams({
-        year: selectedYear.toString(),
+        year: String(type === "monthly" ? monthlyYear : yearlyYear),
         type,
       });
 
@@ -61,26 +149,16 @@ function Reports() {
         throw new Error("Failed to generate report");
       }
 
-      // Get the CSV content
-      const csv = await response.text();
-
-      // Create blob and download
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download =
-        type === "monthly"
-          ? `attendance-report-${selectedYear}-${selectedMonth}.csv`
-          : `attendance-report-${selectedYear}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const data = (await response.json()) as ReportData;
+      // jsPDF is only needed here, so load it on demand.
+      const { buildReportPdf, reportFileName } = await import(
+        "@/lib/report-pdf"
+      );
+      buildReportPdf(data).save(reportFileName(data));
 
       toast({
-        title: "Success",
-        description: `${type === "monthly" ? "Monthly" : "Yearly"} report downloaded successfully`,
+        title: "Report ready",
+        description: `Your ${type} report for ${data.periodLabel} has been downloaded.`,
       });
     } catch (error) {
       toast({
@@ -89,281 +167,158 @@ function Reports() {
         variant: "destructive",
       });
     } finally {
-      setIsDownloading(false);
+      setIsDownloading(null);
     }
   };
 
-  const months = [
-    { value: 1, label: "January" },
-    { value: 2, label: "February" },
-    { value: 3, label: "March" },
-    { value: 4, label: "April" },
-    { value: 5, label: "May" },
-    { value: 6, label: "June" },
-    { value: 7, label: "July" },
-    { value: 8, label: "August" },
-    { value: 9, label: "September" },
-    { value: 10, label: "October" },
-    { value: 11, label: "November" },
-    { value: 12, label: "December" },
-  ];
+  const years = Array.from({ length: 5 }, (_, i) => istYearMonth().year - i);
 
-  const years = Array.from({ length: 5 }, (_, i) => {
-    const year = new Date().getFullYear() - i;
-    return year;
-  });
+  const yearSelect = (
+    id: string,
+    value: number,
+    onChange: (year: number) => void
+  ) => (
+    <Select value={value.toString()} onValueChange={(v) => onChange(Number(v))}>
+      <SelectTrigger id={id} className="h-11 w-full">
+        <SelectValue placeholder="Select year" />
+      </SelectTrigger>
+      <SelectContent>
+        {years.map((y) => (
+          <SelectItem key={y} value={y.toString()}>
+            {y}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
+  const downloadButton = (type: "monthly" | "yearly", className: string) => (
+    <Button
+      onClick={() => downloadReport(type)}
+      disabled={!!isDownloading}
+      size="lg"
+      className={cn("h-12 w-full text-base font-semibold sm:w-full", className)}
+    >
+      {isDownloading === type ? (
+        <Loader2 className="animate-spin" />
+      ) : (
+        <Download />
+      )}
+      {isDownloading === type ? "Generating PDF..." : "Download PDF"}
+    </Button>
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header */}
-      <header ref={headerRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-900">
-              AttendanceApp
-            </span>
-          </div>
+    <AppShell>
+      <PageHeader
+        title="Reports"
+        description="Beautiful, print-ready PDF reports of your attendance. All times are in Indian Standard Time."
+      />
 
-          {/* Mobile Menu Toggle */}
-          <div className="md:hidden flex items-center">
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="text-gray-600 hover:text-gray-900 focus:outline-none"
-            >
-              {isMobileMenuOpen ? (
-                <X className="w-6 h-6" />
-              ) : (
-                <Menu className="w-6 h-6" />
-              )}
-            </button>
-          </div>
-
-          {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-4">
-            <span className="text-sm text-gray-600">Welcome, {user?.name}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => router.push("/dashboard")}
-            >
-              Dashboard
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleLogout}
-              className="text-red-600 hover:text-red-700"
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
-          </div>
-        </div>
-
-        {/* Mobile Navigation */}
-        {isMobileMenuOpen && (
-          <div className="md:hidden absolute top-full left-0 w-full bg-white border-t border-gray-100 shadow-lg">
-            <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
-              <span className="text-sm text-gray-600 py-2 px-4 font-medium">
-                Welcome, {user?.name}
-              </span>
-              <Button
-                variant="ghost"
-                className="w-full justify-start text-gray-700 font-normal"
-                onClick={() => router.push("/dashboard")}
-              >
-                Dashboard
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={handleLogout}
-                className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
-              >
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </Button>
-            </div>
-          </div>
-        )}
-      </header>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
-        {/* Page Title */}
-        <div className="mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-3">
-            Attendance Reports
-          </h1>
-          <p className="text-gray-600 text-lg">
-            Download your attendance reports in CSV format for detailed analysis
-          </p>
-        </div>
-
-        {/* Monthly Report */}
-        <Card className="py-4 px-2 lg:p-8 bg-white mb-8">
-          <div className="flex items-center gap-3 mb-6">
-            <Calendar className="w-6 h-6 text-blue-600" />
-            <h2 className="text-xl font-bold text-gray-900">Monthly Report</h2>
-          </div>
-
-          <p className="text-gray-600 mb-6">
-            Download a detailed report of your attendance for a specific month
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+      <div className="grid gap-5 lg:grid-cols-2">
+        <ReportCard
+          icon={CalendarDays}
+          title="Monthly report"
+          description="A detailed day-by-day record for one month."
+          accent="blue"
+          includes={[
+            "Summary cards: paid days, late days, hours and overtime",
+            "Colour-coded daily log with check-in/out and breaks",
+            "Weekly offs, holidays and leave included",
+          ]}
+          action={downloadButton("monthly", "bg-blue-600 hover:bg-blue-700")}
+        >
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label
+                htmlFor="report-month"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
+              >
                 Month
               </label>
               <Select
                 value={selectedMonth.toString()}
                 onValueChange={(val) => setSelectedMonth(parseInt(val))}
               >
-                <SelectTrigger className="w-full">
+                <SelectTrigger id="report-month" className="h-11 w-full">
                   <SelectValue placeholder="Select month" />
                 </SelectTrigger>
                 <SelectContent>
-                  {months.map((month) => (
-                    <SelectItem key={month.value} value={month.value.toString()}>
-                      {month.label}
+                  {MONTHS.map((label, i) => (
+                    <SelectItem key={label} value={String(i + 1)}>
+                      {label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label
+                htmlFor="report-month-year"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
+              >
                 Year
               </label>
-              <Select
-                value={selectedYear.toString()}
-                onValueChange={(val) => setSelectedYear(parseInt(val))}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select year" />
-                </SelectTrigger>
-                <SelectContent>
-                  {years.map((year) => (
-                    <SelectItem key={year} value={year.toString()}>
-                      {year}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {yearSelect("report-month-year", monthlyYear, setMonthlyYear)}
             </div>
           </div>
+        </ReportCard>
 
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <p className="text-sm text-blue-900">
-              <strong>Report includes:</strong> one row per day with
-              check-in/out times, break, working hours, overtime hours and
-              total hours, plus weekly offs, holidays, leave and a paid-days
-              summary
-            </p>
-          </div>
-
-          <Button
-            onClick={() => downloadReport("monthly")}
-            disabled={isDownloading}
-            size="lg"
-            className="bg-blue-600 hover:bg-blue-700 w-full md:w-auto"
+        <ReportCard
+          icon={CalendarRange}
+          title="Yearly report"
+          description="Your whole year at a glance, month by month."
+          accent="emerald"
+          includes={[
+            "Annual summary of days, hours and overtime",
+            "Month-by-month breakdown table",
+            "Full daily log for the year",
+          ]}
+          action={downloadButton(
+            "yearly",
+            "bg-emerald-600 hover:bg-emerald-700"
+          )}
+        >
+          <label
+            htmlFor="report-year"
+            className="mb-1.5 block text-sm font-medium text-gray-700"
           >
-            <Download className="w-5 h-5 mr-2" />
-            {isDownloading ? "Downloading..." : "Download Monthly Report"}
-          </Button>
-        </Card>
-
-        {/* Yearly Report */}
-        <Card className="py-4 px-2 lg:p-8 bg-white">
-          <div className="flex items-center gap-3 mb-6">
-            <Calendar className="w-6 h-6 text-green-600" />
-            <h2 className="text-xl font-bold text-gray-900">Yearly Report</h2>
-          </div>
-
-          <p className="text-gray-600 mb-6">
-            Download a comprehensive report of your entire year&apos;s
-            attendance and statistics
-          </p>
-
-          <div className="mb-8">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Year
-            </label>
-            <Select
-              value={selectedYear.toString()}
-              onValueChange={(val) => setSelectedYear(parseInt(val))}
-            >
-              <SelectTrigger className="w-full md:w-64">
-                <SelectValue placeholder="Select year" />
-              </SelectTrigger>
-              <SelectContent>
-                {years.map((year) => (
-                  <SelectItem key={year} value={year.toString()}>
-                    {year}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-            <p className="text-sm text-green-900">
-              <strong>Report includes:</strong> Complete annual summary with
-              month-by-month breakdowns, total working hours, overtime
-              calculations, and attendance statistics
-            </p>
-          </div>
-
-          <Button
-            onClick={() => downloadReport("yearly")}
-            disabled={isDownloading}
-            size="lg"
-            className="bg-green-600 hover:bg-green-700 w-full md:w-auto"
-          >
-            <Download className="w-5 h-5 mr-2" />
-            {isDownloading ? "Downloading..." : "Download Yearly Report"}
-          </Button>
-        </Card>
-
-        {/* Recent Downloads Info */}
-        <Card className="p-4 lg:p-8 bg-gradient-to-br from-gray-50 to-gray-100 mt-12">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            About Your Reports
-          </h3>
-          <ul className="space-y-3 text-gray-700">
-            <li className="flex items-start gap-3">
-              <span className="text-blue-600 font-bold mt-1">•</span>
-              <span>
-                Reports are generated in CSV format for easy opening in Excel,
-                Google Sheets, or other applications
-              </span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="text-blue-600 font-bold mt-1">•</span>
-              <span>
-                Each report includes detailed records of all your check-ins and
-                check-outs
-              </span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="text-blue-600 font-bold mt-1">•</span>
-              <span>
-                Automatically calculates hours worked, overtime, and late
-                arrivals
-              </span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="text-blue-600 font-bold mt-1">•</span>
-              <span>
-                Perfect for payroll, performance reviews, or personal
-                record-keeping
-              </span>
-            </li>
-          </ul>
-        </Card>
+            Year
+          </label>
+          {yearSelect("report-year", yearlyYear, setYearlyYear)}
+        </ReportCard>
       </div>
-    </div>
+
+      <section className="mt-6 grid gap-3 rounded-2xl border border-gray-100 bg-white/70 p-5 shadow-sm sm:grid-cols-3 sm:p-6">
+        {[
+          {
+            icon: FileText,
+            title: "A4 PDF",
+            text: "Clean layout that prints and shares well.",
+          },
+          {
+            icon: Clock,
+            title: "IST times",
+            text: "Every time is shown in Indian Standard Time.",
+          },
+          {
+            icon: Printer,
+            title: "Ready for payroll",
+            text: "Totals for working hours, overtime and paid days.",
+          },
+        ].map(({ icon: Icon, title, text }) => (
+          <div key={title} className="flex items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+              <Icon className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">{title}</p>
+              <p className="text-sm text-gray-600">{text}</p>
+            </div>
+          </div>
+        ))}
+      </section>
+    </AppShell>
   );
 }
 

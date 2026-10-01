@@ -1,28 +1,39 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { RequireAuth } from "@/components/require-auth";
+import { AppShell } from "@/components/app-shell";
 import {
   formatDuration,
   formatHours,
   totalBreakMinutes,
 } from "@/lib/attendance";
 import {
-  Clock,
-  LogOut,
-  Calendar,
-  TrendingUp,
+  formatDateKey,
+  formatIstTime,
+  istMinutesOfDay,
+  istYearMonth,
+  toLocalDateKey,
+} from "@/lib/date";
+import {
   AlertCircle,
+  CalendarDays,
   CheckCircle2,
-  Menu,
-  X,
+  Coffee,
+  Gauge,
+  Loader2,
+  LogIn,
+  LogOut,
+  Play,
+  Timer,
+  TrendingUp,
+  XCircle,
+  type LucideIcon,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface TodayAttendance {
   date: string;
@@ -47,41 +58,142 @@ interface AttendanceStats {
   averageHoursWorked: number;
 }
 
+function greeting(now: Date): string {
+  const minutes = istMinutesOfDay(now);
+  if (minutes < 12 * 60) return "Good morning";
+  if (minutes < 17 * 60) return "Good afternoon";
+  return "Good evening";
+}
+
+/** Minutes worked so far today: elapsed since check-in minus breaks. */
+function liveWorkedMinutes(today: TodayAttendance, now: Date): number {
+  if (!today.checkInTime) return 0;
+  const start = new Date(today.checkInTime).getTime();
+  const end = today.checkOutTime
+    ? new Date(today.checkOutTime).getTime()
+    : now.getTime();
+  const breakMs = (today.breaks ?? []).reduce((sum, b) => {
+    const s = new Date(b.start).getTime();
+    const e = b.end ? new Date(b.end).getTime() : now.getTime();
+    return e > s ? sum + (e - s) : sum;
+  }, 0);
+  return Math.max(0, (end - start - breakMs) / 60000);
+}
+
+function TodayTile({
+  icon: Icon,
+  label,
+  value,
+  tone = "slate",
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: ReactNode;
+  tone?: "slate" | "green" | "red" | "orange" | "blue";
+}) {
+  const tones = {
+    slate: "bg-slate-100 text-slate-600",
+    green: "bg-green-100 text-green-600",
+    red: "bg-red-100 text-red-600",
+    orange: "bg-orange-100 text-orange-600",
+    blue: "bg-blue-100 text-blue-600",
+  };
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white p-3 sm:p-4">
+      <span
+        className={cn(
+          "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+          tones[tone]
+        )}
+      >
+        <Icon className="h-5 w-5" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-xs text-gray-500">{label}</p>
+        <p className="truncate text-base font-semibold text-gray-900 sm:text-lg">
+          {value}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  hint,
+  gradient,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: ReactNode;
+  hint?: ReactNode;
+  gradient: string;
+}) {
+  return (
+    <div className="group relative overflow-hidden rounded-2xl border border-gray-100 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md sm:p-5">
+      <span
+        className={cn(
+          "mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-sm",
+          gradient
+        )}
+      >
+        <Icon className="h-5 w-5" />
+      </span>
+      <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+        {label}
+      </p>
+      <p className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
+        {value}
+      </p>
+      {hint && <p className="mt-1 text-xs text-gray-500">{hint}</p>}
+      <span
+        className={cn(
+          "pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-br opacity-10 transition group-hover:opacity-20",
+          gradient
+        )}
+      />
+    </div>
+  );
+}
+
 function Dashboard() {
   const [today, setToday] = useState<TodayAttendance | null>(null);
   const [stats, setStats] = useState<AttendanceStats | null>(null);
-  const [, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [isTogglingBreak, setIsTogglingBreak] = useState(false);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const router = useRouter();
+  const [now, setNow] = useState(() => new Date());
   const { toast } = useToast();
-  const { user, token, logout } = useAuth();
-  const headerRef = useRef<HTMLElement>(null);
+  const { user, token } = useAuth();
 
+  // Live clock and running timer.
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
-        setIsMobileMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
   }, []);
 
   const fetchData = useCallback(async () => {
-    setIsLoading(true);
     try {
       const [todayRes, statsRes] = await Promise.all([
         fetch("/api/attendance/today", {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         }),
-        fetch("/api/attendance/stats", {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store",
-        }),
+        // Dashboard stats cover the current month (IST); without a month the
+        // API totals the whole year.
+        fetch(
+          `/api/attendance/stats?${new URLSearchParams({
+            year: String(istYearMonth().year),
+            month: String(istYearMonth().month),
+          })}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+          }
+        ),
       ]);
 
       if (todayRes.ok) {
@@ -173,28 +285,6 @@ function Dashboard() {
     }
   };
 
-  const handleLogout = () => {
-    logout();
-    router.push("/");
-  };
-
-  const formatTime = (isoString?: string) => {
-    if (!isoString) return "—";
-    return new Date(isoString).toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  };
-
-  const onBreak = !!today?.breaks?.some((b) => !b.end);
-  // A paid day off: a listed holiday, or a day outside the working days.
-  const offLabel = today?.holiday
-    ? `Holiday — ${today.holiday}`
-    : today?.weeklyOff
-      ? "Weekly off — enjoy your day"
-      : null;
-
   const handleBreak = async (action: "start" | "end") => {
     setIsTogglingBreak(true);
     try {
@@ -236,319 +326,287 @@ function Dashboard() {
     }
   };
 
-  const formatDate = (isoString: string) => {
-    return new Date(isoString).toLocaleDateString("en-US", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  };
+  const checkedIn = !!today?.checkInTime;
+  const checkedOut = !!today?.checkOutTime;
+  const working = checkedIn && !checkedOut;
+  const onBreak = working && !!today?.breaks?.some((b) => !b.end);
+  // A paid day off: a listed holiday, or a day outside the working days.
+  const offLabel = today?.holiday
+    ? `Holiday · ${today.holiday}`
+    : today?.weeklyOff
+      ? "Weekly off"
+      : null;
+
+  const workedMinutes = today ? liveWorkedMinutes(today, now) : 0;
+  const breakMinutes = checkedOut
+    ? (today?.breakMinutes ?? totalBreakMinutes(today?.breaks))
+    : totalBreakMinutes(today?.breaks);
+
+  const state: { label: string; dot: string; tone: string } = onBreak
+    ? { label: "On break", dot: "bg-orange-400", tone: "text-orange-100" }
+    : working
+      ? { label: "Clocked in", dot: "bg-green-400", tone: "text-green-100" }
+      : checkedOut
+        ? { label: "Day complete", dot: "bg-white", tone: "text-blue-100" }
+        : offLabel
+          ? { label: offLabel, dot: "bg-purple-300", tone: "text-purple-100" }
+          : { label: "Not checked in", dot: "bg-white/60", tone: "text-blue-100" };
+
+  const statusTone =
+    today?.status === "late"
+      ? "orange"
+      : today?.status === "present"
+        ? "green"
+        : "slate";
+  const firstName = user?.name?.split(" ")[0] ?? "";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header */}
-      <header ref={headerRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-lg font-bold text-gray-900">
-              AttendanceApp
-            </span>
+    <AppShell>
+      {/* Hero: greeting, clock and the main action */}
+      <section className="relative mb-6 overflow-hidden rounded-3xl bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 p-5 text-white shadow-xl shadow-blue-600/20 sm:p-8">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/10 blur-2xl" />
+        <div className="pointer-events-none absolute -bottom-24 left-1/3 h-56 w-56 rounded-full bg-indigo-400/20 blur-3xl" />
+
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm text-blue-100">
+              {formatDateKey(today?.date || toLocalDateKey(now), {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              })}
+            </p>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
+              {greeting(now)}
+              {firstName && `, ${firstName}`} 👋
+            </h1>
+            <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-sm font-medium backdrop-blur">
+              <span className="relative flex h-2.5 w-2.5">
+                {working && (
+                  <span
+                    className={cn(
+                      "absolute inline-flex h-full w-full animate-ping rounded-full opacity-75",
+                      state.dot
+                    )}
+                  />
+                )}
+                <span
+                  className={cn(
+                    "relative inline-flex h-2.5 w-2.5 rounded-full",
+                    state.dot
+                  )}
+                />
+              </span>
+              {state.label}
+            </div>
           </div>
 
-          {/* Mobile Menu Toggle */}
-          <div className="md:hidden flex items-center">
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="text-gray-600 hover:text-gray-900 focus:outline-none"
-            >
-              {isMobileMenuOpen ? (
-                <X className="w-6 h-6" />
+          <div className="lg:text-right">
+            <p className="text-4xl font-extrabold tabular-nums tracking-tight sm:text-5xl">
+              {formatIstTime(now, { seconds: true })}
+            </p>
+            <p className="mt-1 text-sm text-blue-100">
+              {checkedIn ? (
+                <>
+                  {working ? "Working for " : "Worked "}
+                  <span className="font-semibold text-white">
+                    {formatDuration(workedMinutes) === "—"
+                      ? "0m"
+                      : formatDuration(workedMinutes)}
+                  </span>
+                  {" today"}
+                </>
               ) : (
-                <Menu className="w-6 h-6" />
+                "India Standard Time"
               )}
-            </button>
-          </div>
-
-          {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-4">
-            <span className="text-sm text-gray-600">Welcome, {user?.name}</span>
-            <Link href="/history">
-              <Button variant="outline" size="sm">
-                History
-              </Button>
-            </Link>
-            <Link href="/reports">
-              <Button variant="outline" size="sm">
-                Reports
-              </Button>
-            </Link>
-            <Link href="/settings">
-              <Button variant="outline" size="sm">
-                Settings
-              </Button>
-            </Link>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleLogout}
-              className="text-red-600 hover:text-red-700"
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
+            </p>
           </div>
         </div>
 
-        {/* Mobile Navigation */}
-        {isMobileMenuOpen && (
-          <div className="md:hidden absolute top-full left-0 w-full bg-white border-t border-gray-100 shadow-lg">
-            <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
-              <span className="text-sm text-gray-600 py-2 px-4 font-medium">
-                Welcome, {user?.name}
-              </span>
-              <Link href="/history">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start text-gray-700 font-normal"
-                >
-                  History
-                </Button>
-              </Link>
-              <Link href="/reports">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start text-gray-700 font-normal"
-                >
-                  Reports
-                </Button>
-              </Link>
-              <Link href="/settings">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start text-gray-700 font-normal"
-                >
-                  Settings
-                </Button>
-              </Link>
+        <div className="relative mt-6 flex flex-col gap-3 sm:flex-row">
+          {isLoading ? (
+            <div className="flex h-12 items-center gap-2 text-blue-100">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading today…
+            </div>
+          ) : !checkedIn ? (
+            <Button
+              onClick={handleCheckIn}
+              disabled={isCheckingIn}
+              size="lg"
+              className="h-12 bg-white px-8 text-base font-semibold text-blue-700 shadow-lg hover:bg-blue-50"
+            >
+              {isCheckingIn ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <LogIn />
+              )}
+              {isCheckingIn ? "Checking in..." : "Check in"}
+            </Button>
+          ) : working ? (
+            <>
               <Button
-                variant="ghost"
-                onClick={handleLogout}
-                className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
-              >
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </Button>
-            </div>
-          </div>
-        )}
-      </header>
-
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-8 lg:py-12">
-        {/* Today's Attendance Card */}
-        <div className="mb-8">
-          <Card className="px-2 py-4 lg:p-8 bg-white">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-              <div>
-                <h1 className="text-lg font-bold text-gray-900 mb-2">
-                  Today&apos;s Attendance
-                </h1>
-                <p className="text-gray-600">
-                  {formatDate(today?.date || new Date().toISOString())}
-                </p>
-              </div>
-              <div className="flex items-center">
-                {today?.checkInTime && !today?.checkOutTime && onBreak && (
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 bg-orange-500 rounded-full animate-pulse"></div>
-                    <span className="text-orange-600 font-medium">
-                      On Break
-                    </span>
-                  </div>
-                )}
-                {today?.checkInTime && !today?.checkOutTime && !onBreak && (
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-                    <span className="text-green-600 font-medium">
-                      Currently Clocked In
-                    </span>
-                  </div>
-                )}
-                {today?.checkOutTime && (
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    <span className="text-green-600 font-medium">
-                      Completed
-                    </span>
-                  </div>
-                )}
-                {!today?.checkInTime && offLabel && (
-                  <div className="flex items-center gap-2">
-                    <Calendar className="w-5 h-5 text-purple-500" />
-                    <span className="text-purple-700 font-medium">
-                      {offLabel}
-                    </span>
-                  </div>
-                )}
-                {!today?.checkInTime && !offLabel && (
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-5 h-5 text-gray-400" />
-                    <span className="text-gray-600 font-medium">
-                      Not Checked In
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
-                <p className="text-sm text-gray-600 mb-1">Check In Time</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {formatTime(today?.checkInTime)}
-                </p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
-                <p className="text-sm text-gray-600 mb-1">Check Out Time</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {formatTime(today?.checkOutTime)}
-                </p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
-                <p className="text-sm text-gray-600 mb-1">Hours Worked</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {formatHours(today?.hoursWorked)}
-                </p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
-                <p className="text-sm text-gray-600 mb-1">Break Time</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {formatDuration(
-                    today?.breakMinutes ?? totalBreakMinutes(today?.breaks),
-                  )}
-                </p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 lg:p-4">
-                <p className="text-sm text-gray-600 mb-1">Status</p>
-                {!today?.checkInTime && offLabel ? (
-                  <p className="text-2xl font-bold text-purple-700">
-                    {today?.holiday ? "Holiday" : "Weekly off"}
-                  </p>
-                ) : (
-                  <p
-                    className={`text-2xl font-bold capitalize ${
-                      today?.status === "present"
-                        ? "text-green-600"
-                        : today?.status === "late"
-                          ? "text-yellow-600"
-                          : "text-red-600"
-                    }`}
-                  >
-                    {today?.status || "absent"}
-                  </p>
-                )}
-                {today?.checkInTime && offLabel && (
-                  <p className="text-xs text-purple-700 mt-1">
-                    {today?.holiday ? "Holiday" : "Weekly off"} — all hours
-                    count as overtime
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-4">
-              <Button
-                onClick={handleCheckIn}
-                disabled={isCheckingIn || !!today?.checkInTime}
+                onClick={() => handleBreak(onBreak ? "end" : "start")}
+                disabled={isTogglingBreak}
                 size="lg"
-                className="w-full sm:w-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-300"
+                className={cn(
+                  "h-12 px-6 text-base font-semibold shadow-lg",
+                  onBreak
+                    ? "bg-orange-400 text-white hover:bg-orange-500"
+                    : "bg-white/15 text-white ring-1 ring-white/30 backdrop-blur hover:bg-white/25"
+                )}
               >
-                {isCheckingIn ? "Checking In..." : "Check In"}
+                {isTogglingBreak ? (
+                  <Loader2 className="animate-spin" />
+                ) : onBreak ? (
+                  <Play />
+                ) : (
+                  <Coffee />
+                )}
+                {onBreak ? "End break" : "Take a break"}
               </Button>
-
               <Button
                 onClick={handleCheckOut}
-                disabled={
-                  isCheckingOut || !today?.checkInTime || !!today?.checkOutTime
-                }
+                disabled={isCheckingOut}
                 size="lg"
-                className="w-full sm:w-auto bg-red-600 hover:bg-red-700 disabled:bg-gray-300"
+                className="h-12 bg-white px-8 text-base font-semibold text-red-600 shadow-lg hover:bg-red-50"
               >
-                {isCheckingOut ? "Checking Out..." : "Check Out"}
+                {isCheckingOut ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <LogOut />
+                )}
+                {isCheckingOut ? "Checking out..." : "Check out"}
               </Button>
+            </>
+          ) : (
+            <div className="flex items-center gap-2 rounded-xl bg-white/15 px-4 py-3 text-sm backdrop-blur">
+              <CheckCircle2 className="h-5 w-5 text-green-300" />
+              You&apos;re done for today. See you tomorrow!
             </div>
-          </Card>
+          )}
         </div>
 
-        {/* Statistics */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          <Card className="p-3 lg:p-6 bg-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Present Days</p>
-                <p className="text-lg font-bold text-green-600">
-                  {stats?.totalPresent || 0}
-                </p>
-              </div>
-              <CheckCircle2 className="w-8 h-8 text-green-600 opacity-20" />
-            </div>
-          </Card>
+        {checkedIn && offLabel && (
+          <p className="relative mt-4 text-xs text-purple-100">
+            Today is a {today?.holiday ? "holiday" : "weekly off"} — all hours
+            count as overtime.
+          </p>
+        )}
+      </section>
 
-          <Card className="p-3 lg:p-6 bg-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Late Days</p>
-                <p className="text-lg font-bold text-yellow-600">
-                  {stats?.totalLate || 0}
-                </p>
-              </div>
-              <AlertCircle className="w-8 h-8 text-yellow-600 opacity-20" />
-            </div>
-          </Card>
-
-          <Card className="p-3 lg:p-6 bg-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Absent Days</p>
-                <p className="text-lg font-bold text-red-600">
-                  {stats?.totalAbsent || 0}
-                </p>
-              </div>
-              <AlertCircle className="w-8 h-8 text-red-600 opacity-20" />
-            </div>
-          </Card>
-
-          <Card className="p-3 lg:p-6 bg-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Overtime Hours</p>
-                <p className="text-lg font-bold text-blue-600">
-                  {formatHours(stats?.totalOvertimeHours)}
-                </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  {stats?.totalOvertime || 0}{" "}
-                  {stats?.totalOvertime === 1 ? "day" : "days"} with overtime
-                </p>
-              </div>
-              <TrendingUp className="w-8 h-8 text-blue-600 opacity-20" />
-            </div>
-          </Card>
-
-          <Card className="p-3 lg:p-6 bg-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Avg Hours/Day</p>
-                <p className="text-lg font-bold text-purple-600">
-                  {formatHours(stats?.averageHoursWorked)}
-                </p>
-              </div>
-              <Calendar className="w-8 h-8 text-purple-600 opacity-20" />
-            </div>
-          </Card>
+      {/* Today at a glance */}
+      <section className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+        <TodayTile
+          icon={LogIn}
+          label="Check in"
+          value={formatIstTime(today?.checkInTime) || "—"}
+          tone="green"
+        />
+        <TodayTile
+          icon={LogOut}
+          label="Check out"
+          value={formatIstTime(today?.checkOutTime) || "—"}
+          tone="red"
+        />
+        <TodayTile
+          icon={Timer}
+          label="Hours worked"
+          value={
+            checkedOut
+              ? formatHours(today?.hoursWorked)
+              : checkedIn
+                ? formatDuration(workedMinutes)
+                : "—"
+          }
+          tone="blue"
+        />
+        <TodayTile
+          icon={Coffee}
+          label="Break"
+          value={formatDuration(breakMinutes)}
+          tone="orange"
+        />
+        <div className="col-span-2 lg:col-span-1">
+          <TodayTile
+            icon={
+              today?.status === "late"
+                ? AlertCircle
+                : checkedIn
+                  ? CheckCircle2
+                  : offLabel
+                    ? CalendarDays
+                    : XCircle
+            }
+            label="Status"
+            value={
+              <span className="capitalize">
+                {!checkedIn && offLabel
+                  ? today?.holiday
+                    ? "Holiday"
+                    : "Weekly off"
+                  : checkedIn
+                    ? today?.status
+                    : "Not yet"}
+              </span>
+            }
+            tone={statusTone}
+          />
         </div>
+      </section>
+
+      {/* This month */}
+      <div className="mb-4 flex items-baseline justify-between">
+        <h2 className="text-lg font-semibold text-gray-900">This month</h2>
+        <span className="text-sm text-gray-500">
+          {formatDateKey(toLocalDateKey(now), {
+            month: "long",
+            year: "numeric",
+          })}
+        </span>
       </div>
-    </div>
+      <section className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-5">
+        <StatCard
+          icon={CheckCircle2}
+          label="Present"
+          value={stats?.totalPresent ?? 0}
+          hint="days"
+          gradient="from-green-500 to-emerald-600"
+        />
+        <StatCard
+          icon={AlertCircle}
+          label="Late"
+          value={stats?.totalLate ?? 0}
+          hint="days"
+          gradient="from-amber-400 to-orange-500"
+        />
+        <StatCard
+          icon={XCircle}
+          label="Absent"
+          value={stats?.totalAbsent ?? 0}
+          hint="days"
+          gradient="from-rose-500 to-red-600"
+        />
+        <StatCard
+          icon={TrendingUp}
+          label="Overtime"
+          value={formatHours(stats?.totalOvertimeHours)}
+          hint={`${stats?.totalOvertime ?? 0} ${
+            stats?.totalOvertime === 1 ? "day" : "days"
+          } with overtime`}
+          gradient="from-blue-500 to-indigo-600"
+        />
+        <div className="col-span-2 md:col-span-1">
+          <StatCard
+            icon={Gauge}
+            label="Avg / day"
+            value={formatHours(stats?.averageHoursWorked)}
+            hint="hours worked"
+            gradient="from-violet-500 to-purple-600"
+          />
+        </div>
+      </section>
+    </AppShell>
   );
 }
 

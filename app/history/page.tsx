@@ -1,12 +1,17 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState, useRef } from "react";
-import Link from "next/link";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { RequireAuth } from "@/components/require-auth";
+import { AppShell, PageHeader } from "@/components/app-shell";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -17,14 +22,15 @@ import {
 } from "@/components/ui/select";
 import {
   Calendar,
-  Clock,
+  ChevronsRight,
   Download,
-  LayoutDashboard,
+  Loader2,
+  Pencil,
   Plus,
-  Menu,
-  Settings as SettingsIcon,
+  Trash2,
   X,
 } from "lucide-react";
+import type { ReportData } from "@/types/report";
 import type { AttendanceRecord } from "@/types/api";
 import {
   DAY_TYPES,
@@ -41,7 +47,18 @@ import {
   normalizeSchedule,
   type WorkSchedule,
 } from "@/lib/work-schedule";
-import { isWorkingDay, toLocalDateKey } from "@/lib/date";
+import {
+  addDays,
+  dayOfWeek,
+  formatDateKey,
+  formatIstTime,
+  getDateRange,
+  istWallClockToIso,
+  istYearMonth,
+  isWorkingDay,
+  toIstTimeInput,
+  toLocalDateKey,
+} from "@/lib/date";
 import { findHoliday, normalizeHolidays, type Holiday } from "@/lib/holidays";
 
 const MONTHS = [
@@ -59,48 +76,47 @@ const MONTHS = [
   "December",
 ];
 
+/** Instant → "09:05 AM" in IST. */
 function formatTime(iso?: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? "—"
-    : d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  return formatIstTime(iso) || "—";
 }
 
 function formatDate(dateKey: string): { weekday: string; label: string } {
-  // dateKey is YYYY-MM-DD; parse as local midnight so the weekday is correct.
-  const d = new Date(`${dateKey}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return { weekday: "", label: dateKey };
+  if (Number.isNaN(dayOfWeek(dateKey))) return { weekday: "", label: dateKey };
   return {
-    weekday: d.toLocaleDateString("en-US", { weekday: "short" }),
-    label: d.toLocaleDateString("en-US", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    }),
+    weekday: formatDateKey(dateKey, { weekday: "short" }),
+    label: formatDateKey(dateKey),
   };
 }
 
 /**
- * Local "HH:MM" on a given day → exact ISO instant, using the browser's
- * timezone. The server can't do this: it may sit in another timezone.
+ * IST "HH:MM" on a given day → exact ISO instant.
  * Empty input → empty string, which tells the API to clear the time.
  */
 function toInstant(dateKey: string, time: string): string {
   if (!time) return "";
-  const d = new Date(`${dateKey}T${time}:00`);
-  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  return istWallClockToIso(dateKey, time) ?? "";
 }
 
-/** ISO timestamp → local "HH:MM" for the edit inputs. */
+/** ISO timestamp → IST "HH:MM" for the edit inputs. */
 function toTimeInput(iso?: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
+  return toIstTimeInput(iso);
 }
+
+const HEADERS = [
+  "Date",
+  "Check in",
+  "Check out",
+  "Break",
+  "Working",
+  "Overtime",
+  "Total",
+  "Status",
+];
+/** Table cell spacing: tighter on phones, roomier on wider screens. */
+const CELL = "whitespace-nowrap px-3 py-3 md:px-4 md:py-3.5 lg:px-5";
+/** The Date column stays put while the rest of the table scrolls. */
+const PINNED = "sticky left-0 z-10 shadow-[inset_-1px_0_0_#f1f5f9]";
 
 function StatusBadge({
   record,
@@ -154,8 +170,9 @@ function StatusBadge({
 
 function History() {
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState<number | "all">(now.getMonth() + 1);
+  const istNow = istYearMonth(now);
+  const [year, setYear] = useState(istNow.year);
+  const [month, setMonth] = useState<number | "all">(istNow.month);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   // The user's schedule decides the day length (overtime threshold) and
@@ -177,22 +194,37 @@ function History() {
   const [isSaving, setIsSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [addDate, setAddDate] = useState("");
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  const headerRef = useRef<HTMLElement>(null);
+  // Width of the table's visible scroll area, so the inline editor can be
+  // pinned to exactly what is on screen; and whether there is still more to
+  // swipe to on the right.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [visibleWidth, setVisibleWidth] = useState<number | null>(null);
+  const [tableOverflows, setTableOverflows] = useState(false);
+  const [moreToRight, setMoreToRight] = useState(false);
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
-        setIsMobileMenuOpen(false);
-      }
+    if (!scrollEl) return;
+    const measure = () => {
+      setVisibleWidth(scrollEl.clientWidth);
+      setTableOverflows(scrollEl.scrollWidth > scrollEl.clientWidth + 1);
+      setMoreToRight(
+        scrollEl.scrollLeft + scrollEl.clientWidth < scrollEl.scrollWidth - 1
+      );
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scrollEl);
+    if (scrollEl.firstElementChild) observer.observe(scrollEl.firstElementChild);
+    scrollEl.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      observer.disconnect();
+      scrollEl.removeEventListener("scroll", measure);
+    };
+  }, [scrollEl]);
 
-  /** Download the CSV report for whatever the filters currently show. */
-  const downloadCsv = async () => {
+  /** Download the PDF report for whatever the filters currently show. */
+  const downloadPdf = async () => {
     setIsDownloading(true);
     try {
       const params = new URLSearchParams({
@@ -206,19 +238,12 @@ function History() {
       });
       if (!res.ok) throw new Error("Request failed");
 
-      const blob = new Blob([await res.text()], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download =
-        month === "all"
-          ? `attendance-report-${year}.csv`
-          : `attendance-report-${year}-${month}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      toast({ title: "Downloaded", description: "Open it in any spreadsheet." });
+      const data = (await res.json()) as ReportData;
+      const { buildReportPdf, reportFileName } = await import(
+        "@/lib/report-pdf"
+      );
+      buildReportPdf(data).save(reportFileName(data));
+      toast({ title: "Downloaded", description: `Report for ${data.periodLabel}.` });
     } catch {
       toast({
         title: "Couldn't download",
@@ -294,6 +319,7 @@ function History() {
 
   const openEditor = (record: AttendanceRecord) => {
     setEditingDate(record.date);
+    setShowAdd(false); // both forms share one draft
     setDraft({
       checkIn: toTimeInput(record.checkInTime),
       checkOut: toTimeInput(record.checkOutTime),
@@ -398,21 +424,14 @@ function History() {
   const offDays: AttendanceRecord[] = (() => {
     const known = new Set(records.map((r) => r.date));
     const todayKey = toLocalDateKey(now);
-    const first =
-      month === "all" ? new Date(year, 0, 1) : new Date(year, month - 1, 1);
-    const last =
-      month === "all" ? new Date(year, 11, 31) : new Date(year, month, 0);
+    const { startDate: first, endDate: last } =
+      month === "all" ? getDateRange(year) : getDateRange(year, month);
     const extra: AttendanceRecord[] = [];
-    for (
-      const cursor = new Date(first);
-      cursor <= last;
-      cursor.setDate(cursor.getDate() + 1)
-    ) {
-      const key = toLocalDateKey(cursor);
+    for (let key = first; key <= last; key = addDays(key, 1)) {
       if (key > todayKey) break;
       if (known.has(key)) continue;
       if (
-        !isWorkingDay(cursor, schedule.workingDays) ||
+        !isWorkingDay(key, schedule.workingDays) ||
         findHoliday(key, holidays)
       ) {
         extra.push({ _id: "", userId: "", date: key, status: "absent" });
@@ -436,380 +455,369 @@ function History() {
     (r) => r.checkInTime && !r.checkOutTime,
   ).length;
 
-  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+  const years = Array.from({ length: 5 }, (_, i) => istNow.year - i);
+
+  const periodLabel =
+    month === "all" ? String(year) : `${MONTHS[(month as number) - 1]} ${year}`;
+
+  /** Type / times / note fields shared by "Add day" and the per-day editor. */
+  const renderDraftFields = (withNote: boolean) => (
+    <>
+      <div className="col-span-2 sm:col-span-1">
+        <label className="mb-1.5 block text-sm font-medium text-gray-700">
+          Type
+        </label>
+        <Select
+          value={draft.dayType}
+          onValueChange={(val) =>
+            setDraft((d) => ({
+              ...d,
+              dayType: val as DayType,
+            }))
+          }
+        >
+          <SelectTrigger className="h-10 w-full">
+            <SelectValue placeholder="Select type" />
+          </SelectTrigger>
+          <SelectContent>
+            {DAY_TYPES.map((t) => (
+              <SelectItem key={t} value={t}>
+                {DAY_TYPE_LABELS[t]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {(draft.dayType === "work" || draft.dayType === "wfh") && (
+        <>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">
+              Check in
+            </label>
+            <Input
+              type="time"
+              value={draft.checkIn}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, checkIn: e.target.value }))
+              }
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">
+              Check out
+            </label>
+            <Input
+              type="time"
+              value={draft.checkOut}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, checkOut: e.target.value }))
+              }
+              className="w-full"
+            />
+          </div>
+        </>
+      )}
+
+      {withNote && (
+        <div className="col-span-2 sm:col-span-1 lg:col-span-2">
+          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+            Note
+          </label>
+          <Input
+            value={draft.note}
+            maxLength={500}
+            placeholder="Optional"
+            onChange={(e) => setDraft((d) => ({ ...d, note: e.target.value }))}
+            className="w-full"
+          />
+        </div>
+      )}
+    </>
+  );
+
+  const renderEditor = (record: AttendanceRecord) => (
+    <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {renderDraftFields(true)}
+      </div>
+      <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        {record._id && (
+          <Button
+            variant="outline"
+            onClick={() => deleteDay(record.date)}
+            disabled={isSaving}
+            className="text-red-600 hover:bg-red-50 hover:text-red-700 sm:mr-auto"
+          >
+            <Trash2 />
+            Delete
+          </Button>
+        )}
+        <Button variant="outline" onClick={() => setEditingDate(null)}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => saveDay(record.date)}
+          disabled={isSaving}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
+          {isSaving ? "Saving..." : "Save changes"}
+        </Button>
+      </div>
+      {record.note && !isSaving && (
+        <p className="mt-3 text-xs text-gray-500">Saved note: {record.note}</p>
+      )}
+    </div>
+  );
+
+  const summary: {
+    label: string;
+    value: ReactNode;
+    hint?: ReactNode;
+    tone: string;
+  }[] = [
+    {
+      label: "Paid days",
+      value: paidDays,
+      hint: (
+        <>
+          {workedDays} worked · {offDays.length} off
+          {markedDays > 0 && ` · ${markedDays} leave`}
+        </>
+      ),
+      tone: "text-gray-900",
+    },
+    {
+      label: "Total hours",
+      value: formatHours(totalHours),
+      hint: `${formatHours(totalRegular)} working`,
+      tone: "text-blue-600",
+    },
+    {
+      label: "Overtime",
+      value: formatHours(totalOvertime),
+      hint: `Beyond ${formatHours(standardHours)} a day`,
+      tone: "text-indigo-600",
+    },
+    {
+      label: "Late days",
+      value: records.filter((r) => r.status === "late").length,
+      tone: "text-amber-600",
+    },
+    {
+      label: "Missing check-out",
+      value: openDays,
+      hint: openDays > 0 ? "Tap Edit to fix" : undefined,
+      tone: "text-orange-600",
+    },
+  ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      <header ref={headerRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-900">
-              AttendanceApp
-            </span>
-          </div>
+    <AppShell>
+      <PageHeader
+        title="History"
+        description="Every day you have checked in, most recent first."
+        actions={
+          <Button
+            onClick={() => {
+              setShowAdd(true);
+              setEditingDate(null);
+              setDraft({ checkIn: "", checkOut: "", dayType: "leave", note: "" });
+            }}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            <Plus />
+            Add day / mark leave
+          </Button>
+        }
+      />
 
-          {/* Mobile Menu Toggle */}
-          <div className="md:hidden flex items-center">
+      {/* Filters */}
+      <div className="mb-5 grid grid-cols-2 items-end gap-3 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:flex sm:flex-wrap">
+        <div className="sm:w-40">
+          <label
+            htmlFor="history-month"
+            className="mb-1.5 block text-sm font-medium text-gray-700"
+          >
+            Month
+          </label>
+          <Select
+            value={month.toString()}
+            onValueChange={(val) => setMonth(val === "all" ? "all" : Number(val))}
+          >
+            <SelectTrigger id="history-month" className="h-10 w-full">
+              <SelectValue placeholder="Select month" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Whole year</SelectItem>
+              {MONTHS.map((m, i) => (
+                <SelectItem key={m} value={String(i + 1)}>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="sm:w-28">
+          <label
+            htmlFor="history-year"
+            className="mb-1.5 block text-sm font-medium text-gray-700"
+          >
+            Year
+          </label>
+          <Select
+            value={year.toString()}
+            onValueChange={(val) => setYear(Number(val))}
+          >
+            <SelectTrigger id="history-year" className="h-10 w-full">
+              <SelectValue placeholder="Select year" />
+            </SelectTrigger>
+            <SelectContent>
+              {years.map((y) => (
+                <SelectItem key={y} value={y.toString()}>
+                  {y}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="col-span-2 sm:ml-auto">
+          <Button
+            variant="outline"
+            onClick={downloadPdf}
+            disabled={isDownloading || isLoading}
+            className="h-10 w-full"
+          >
+            {isDownloading ? <Loader2 className="animate-spin" /> : <Download />}
+            {isDownloading ? "Preparing…" : "Download PDF"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Summary */}
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+        {summary.map((s, i) => (
+          <div
+            key={s.label}
+            className={`rounded-2xl border border-gray-100 bg-white p-4 shadow-sm ${
+              i === summary.length - 1 ? "col-span-2 lg:col-span-1" : ""
+            }`}
+          >
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              {s.label}
+            </p>
+            <p className={`mt-1 text-2xl font-bold tracking-tight ${s.tone}`}>
+              {s.value}
+            </p>
+            {s.hint && <p className="mt-1 text-xs text-gray-500">{s.hint}</p>}
+          </div>
+        ))}
+      </div>
+
+      {/* Add a day */}
+      {showAdd && (
+        <div className="mb-5 rounded-2xl border border-blue-100 bg-white p-4 shadow-sm sm:p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900">Add a day</h2>
             <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="text-gray-600 hover:text-gray-900 focus:outline-none"
+              type="button"
+              onClick={() => setShowAdd(false)}
+              className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              aria-label="Close"
             >
-              {isMobileMenuOpen ? (
-                <X className="w-6 h-6" />
-              ) : (
-                <Menu className="w-6 h-6" />
-              )}
+              <X className="h-5 w-5" />
             </button>
           </div>
-
-          {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-3">
-            <Link href="/dashboard">
-              <Button variant="outline" size="sm">
-                <LayoutDashboard className="w-4 h-4 mr-2" />
-                Dashboard
-              </Button>
-            </Link>
-            <Link href="/reports">
-              <Button variant="outline" size="sm">
-                <Download className="w-4 h-4 mr-2" />
-                Reports
-              </Button>
-            </Link>
-            <Link href="/settings">
-              <Button variant="outline" size="sm">
-                <SettingsIcon className="w-4 h-4 mr-2" />
-                Settings
-              </Button>
-            </Link>
-          </div>
-        </div>
-
-        {/* Mobile Navigation */}
-        {isMobileMenuOpen && (
-          <div className="md:hidden absolute top-full left-0 w-full bg-white border-t border-gray-100 shadow-lg">
-            <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
-              <Link href="/dashboard">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start text-gray-700 font-normal"
-                >
-                  <LayoutDashboard className="w-4 h-4 mr-2" />
-                  Dashboard
-                </Button>
-              </Link>
-              <Link href="/reports">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start text-gray-700 font-normal"
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Reports
-                </Button>
-              </Link>
-              <Link href="/settings">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start text-gray-700 font-normal"
-                >
-                  <SettingsIcon className="w-4 h-4 mr-2" />
-                  Settings
-                </Button>
-              </Link>
-            </div>
-          </div>
-        )}
-      </header>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          Attendance History
-        </h1>
-        <p className="text-gray-600 mb-8">
-          Every day you have checked in, most recent first.
-        </p>
-
-        {/* Filters */}
-        <Card className="p-2 lg:p-4 bg-white mb-6">
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="col-span-2 sm:col-span-1">
               <label
-                htmlFor="history-month"
-                className="block text-sm font-medium text-gray-700 mb-1"
+                htmlFor="add-date"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
               >
-                Month
+                Date
               </label>
-              <Select
-                value={month.toString()}
-                onValueChange={(val) =>
-                  setMonth(val === "all" ? "all" : Number(val))
-                }
-              >
-                <SelectTrigger id="history-month" className="w-[140px] h-10">
-                  <SelectValue placeholder="Select month" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Whole year</SelectItem>
-                  {MONTHS.map((m, i) => (
-                    <SelectItem key={m} value={String(i + 1)}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input
+                id="add-date"
+                type="date"
+                value={addDate}
+                onChange={(e) => setAddDate(e.target.value)}
+                className="w-full"
+              />
             </div>
-
-            <div>
-              <label
-                htmlFor="history-year"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Year
-              </label>
-              <Select
-                value={year.toString()}
-                onValueChange={(val) => setYear(Number(val))}
-              >
-                <SelectTrigger id="history-year" className="w-[100px] h-10">
-                  <SelectValue placeholder="Select year" />
-                </SelectTrigger>
-                <SelectContent>
-                  {years.map((y) => (
-                    <SelectItem key={y} value={y.toString()}>
-                      {y}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="sm:ml-auto">
-              <Button
-                variant="outline"
-                onClick={downloadCsv}
-                disabled={isDownloading || isLoading}
-                className="!w-auto"
-              >
-                <Download className="w-4 h-4 mr-2" />
-                {isDownloading ? "Preparing…" : "Download CSV"}
-              </Button>
-            </div>
+            {renderDraftFields(false)}
           </div>
-        </Card>
-
-        {/* Summary */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-          <Card className="p-2 lg:p-4 bg-white">
-            <p className="text-sm text-gray-600 mb-1">Paid days</p>
-            <p className="text-xl font-bold text-gray-900">{paidDays}</p>
-            <p className="text-xs text-gray-500 mt-1">
-              {workedDays} worked · {offDays.length} off/holiday
-              {markedDays > 0 && ` · ${markedDays} leave`}
-            </p>
-          </Card>
-          <Card className="p-2 lg:p-4 bg-white">
-            <p className="text-sm text-gray-600 mb-1">Total hours</p>
-            <p className="text-2xl font-bold text-blue-600">
-              {formatHours(totalHours)}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              {formatHours(totalRegular)} working ·{" "}
-              {formatHours(totalOvertime)} overtime
-            </p>
-          </Card>
-          <Card className="p-2 lg:p-4 bg-white">
-            <p className="text-sm text-gray-600 mb-1">Overtime hours</p>
-            <p className="text-2xl font-bold text-blue-600">
-              {formatHours(totalOvertime)}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              Beyond {formatHours(standardHours)} a day
-              {schedule.overtimeGraceMinutes > 0 &&
-                ` by more than ${schedule.overtimeGraceMinutes}m`}{" "}
-              · all hours on a weekly off or holiday
-            </p>
-          </Card>
-          <Card className="p-2 lg:p-4 bg-white">
-            <p className="text-sm text-gray-600 mb-1">Late days</p>
-            <p className="text-2xl font-bold text-yellow-600">
-              {records.filter((r) => r.status === "late").length}
-            </p>
-          </Card>
-          <Card className="p-2 lg:p-4 bg-white">
-            <p className="text-sm text-gray-600 mb-1">Missing check-out</p>
-            <p className="text-2xl font-bold text-orange-600">{openDays}</p>
-            {openDays > 0 && (
-              <p className="text-xs text-gray-500 mt-1">Use Edit to fix</p>
-            )}
-          </Card>
-        </div>
-
-        {/* Add a day */}
-        <div className="mb-4">
-          {showAdd ? (
-            <Card className="p-2 lg:p-4 bg-white">
-              <div className="flex flex-wrap items-end gap-3">
-                <div>
-                  <label
-                    htmlFor="add-date"
-                    className="block text-sm font-medium text-gray-700 mb-1"
-                  >
-                    Date
-                  </label>
-                  <Input
-                    id="add-date"
-                    type="date"
-                    value={addDate}
-                    onChange={(e) => setAddDate(e.target.value)}
-                    className="w-auto"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="add-type"
-                    className="block text-sm font-medium text-gray-700 mb-1"
-                  >
-                    Type
-                  </label>
-                  <Select
-                    value={draft.dayType}
-                    onValueChange={(val) =>
-                      setDraft((d) => ({
-                        ...d,
-                        dayType: val as DayType,
-                      }))
-                    }
-                  >
-                    <SelectTrigger id="add-type" className="w-[130px] h-10">
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DAY_TYPES.map((t) => (
-                        <SelectItem key={t} value={t}>
-                          {DAY_TYPE_LABELS[t]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {(draft.dayType === "work" || draft.dayType === "wfh") && (
-                  <>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Check in
-                      </label>
-                      <Input
-                        type="time"
-                        value={draft.checkIn}
-                        onChange={(e) =>
-                          setDraft((d) => ({ ...d, checkIn: e.target.value }))
-                        }
-                        className="w-auto"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Check out
-                      </label>
-                      <Input
-                        type="time"
-                        value={draft.checkOut}
-                        onChange={(e) =>
-                          setDraft((d) => ({ ...d, checkOut: e.target.value }))
-                        }
-                        className="w-auto"
-                      />
-                    </div>
-                  </>
-                )}
-                <Button
-                  onClick={() => addDate && saveDay(addDate)}
-                  disabled={!addDate || isSaving}
-                  className="!w-auto bg-blue-600 hover:bg-blue-700"
-                >
-                  {isSaving ? "Saving..." : "Save"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowAdd(false)}
-                  className="!w-auto"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </Card>
-          ) : (
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowAdd(true);
-                setDraft({
-                  checkIn: "",
-                  checkOut: "",
-                  dayType: "leave",
-                  note: "",
-                });
-              }}
-              className="!w-auto"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Add day / mark leave
+          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button variant="outline" onClick={() => setShowAdd(false)}>
+              Cancel
             </Button>
-          )}
+            <Button
+              onClick={() => addDate && saveDay(addDate)}
+              disabled={!addDate || isSaving}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {isSaving ? "Saving..." : "Save"}
+            </Button>
+          </div>
         </div>
+      )}
 
-        {/* Table */}
-        <Card className="bg-white overflow-hidden">
-          {isLoading ? (
-            <p className="p-4 lg:p-8 text-center text-gray-500">Loading…</p>
-          ) : records.length === 0 ? (
-            <div className="p-12 text-center">
-              <Calendar className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-900 font-medium mb-1">
-                No attendance recorded
+      {/* Records */}
+      <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 p-10 text-gray-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </div>
+        ) : records.length === 0 ? (
+          <div className="p-12 text-center">
+            <span className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100">
+              <Calendar className="h-7 w-7 text-slate-400" />
+            </span>
+            <p className="mb-1 font-medium text-gray-900">
+              No attendance recorded
+            </p>
+            <p className="text-sm text-gray-500">Nothing for {periodLabel}.</p>
+          </div>
+        ) : (
+          <>
+            {/* Space stays while the table overflows, so the table does not
+                jump when the hint fades out at the last column. */}
+            {tableOverflows && (
+              <p
+                aria-hidden={!moreToRight}
+                className={`flex items-center justify-end gap-1 border-b border-gray-100 px-3 py-2 text-xs text-gray-500 transition-opacity ${
+                  moreToRight ? "opacity-100" : "opacity-0"
+                }`}
+              >
+                Swipe sideways to see all columns
+                <ChevronsRight className="h-3.5 w-3.5" />
               </p>
-              <p className="text-gray-500 text-sm">
-                Nothing for{" "}
-                {month === "all"
-                  ? year
-                  : `${MONTHS[(month as number) - 1]} ${year}`}
-                .
-              </p>
-            </div>
-          ) : (
-            // `relative` keeps the sr-only header label (absolutely positioned)
-            // inside this scroll area; without it the label sits at the far
-            // right of the wide table and makes the whole page scroll sideways.
-            <div className="relative overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-gray-50 border-b border-gray-200">
+            )}
+
+            {/* The same table on every screen size. On narrow screens it
+                scrolls sideways inside this box (never the page) with the
+                Date column pinned. `relative` keeps the sr-only header label
+                inside the scroll area. */}
+            <div
+              ref={setScrollEl}
+              className="relative overflow-x-auto overscroll-x-contain"
+            >
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-gray-100 bg-slate-50">
                   <tr>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Date
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Check in
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Check out
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Break
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Working hours
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Overtime hours
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Total hours
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
-                      Status
-                    </th>
-                    <th className="px-2 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600 whitespace-nowrap">
+                    {HEADERS.map((h, i) => (
+                      <th
+                        key={h}
+                        className={`${CELL} text-xs font-semibold uppercase tracking-wide text-gray-500 ${
+                          i === 0 ? `${PINNED} bg-slate-50` : ""
+                        }`}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                    <th className={CELL}>
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>
@@ -821,47 +829,56 @@ function History() {
                     const hasHours = typeof record.hoursWorked === "number";
                     const offLabel = offLabelFor(record.date);
                     const split = hasHours ? splitFor(record) : null;
+                    // Pinned cells need an opaque background matching the
+                    // row, or scrolled columns show through them.
+                    const rowBg = isEditing
+                      ? "bg-blue-50"
+                      : "bg-white group-hover:bg-slate-50";
                     return (
                       <Fragment key={record._id || record.date}>
-                        <tr className="hover:bg-gray-50">
-                          <td className="px-2 lg:px-6 py-4 whitespace-nowrap">
-                            <span className="font-medium text-gray-900">
-                              {label}
+                        <tr
+                          className={`group transition-colors ${
+                            isEditing ? "bg-blue-50" : "hover:bg-slate-50"
+                          }`}
+                        >
+                          <td className={`${CELL} ${PINNED} ${rowBg}`}>
+                            <span className="block font-medium text-gray-900 md:inline">
+                              <span className="md:hidden">
+                                {formatDateKey(record.date, {
+                                  day: "numeric",
+                                  month: "short",
+                                })}
+                              </span>
+                              <span className="hidden md:inline">{label}</span>
                             </span>
-                            <span className="ml-2 text-xs text-gray-500">
+                            <span className="block text-xs text-gray-500 md:ml-2 md:inline">
                               {weekday}
+                              {offLabel && record.checkInTime && (
+                                <span
+                                  title="Paid day off — all hours count as overtime"
+                                  className="ml-1 text-purple-600 md:ml-2"
+                                >
+                                  {offLabel.toLowerCase()}
+                                </span>
+                              )}
                             </span>
-                            {/* {record.correctedManually && (
-                              <span
-                                title="Edited by hand"
-                                className="ml-2 text-xs text-gray-400"
-                              >
-                                edited
-                              </span>
-                            )} */}
-                            {offLabel && record.checkInTime && (
-                              <span
-                                title="Paid day off — all hours count as overtime"
-                                className="ml-2 text-xs text-purple-600"
-                              >
-                                {offLabel.toLowerCase()}
-                              </span>
-                            )}
                           </td>
-                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
+                          <td className={`${CELL} text-gray-700`}>
                             {formatTime(record.checkInTime)}
                           </td>
-                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
+                          <td className={`${CELL} text-gray-700`}>
                             {formatTime(record.checkOutTime)}
                           </td>
-                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
-                            {hasHours ? formatDuration(record.breakMinutes || 0) : "—"}
+                          <td className={`${CELL} text-gray-700`}>
+                            {hasHours
+                              ? formatDuration(record.breakMinutes || 0)
+                              : "—"}
                           </td>
-                          <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
+                          <td className={`${CELL} text-gray-700`}>
                             {formatHours(split?.regular)}
                           </td>
                           <td
-                            className={`px-2 lg:px-6 py-4 whitespace-nowrap ${
+                            className={`${CELL} ${
                               split && split.overtime > 0
                                 ? "font-medium text-blue-600"
                                 : "text-gray-400"
@@ -869,13 +886,13 @@ function History() {
                           >
                             {formatHours(split?.overtime)}
                           </td>
-                          <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
+                          <td className={`${CELL} font-semibold text-gray-900`}>
                             {formatHours(record.hoursWorked)}
                           </td>
-                          <td className="px-2 lg:px-6 py-4 whitespace-nowrap">
+                          <td className={CELL}>
                             <StatusBadge record={record} offLabel={offLabel} />
                           </td>
-                          <td className="px-6 py-4 text-right whitespace-nowrap">
+                          <td className={`${CELL} text-right`}>
                             <button
                               type="button"
                               onClick={() =>
@@ -883,122 +900,29 @@ function History() {
                                   ? setEditingDate(null)
                                   : openEditor(record)
                               }
-                              className="text-sm text-blue-600 hover:underline"
+                              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-blue-600 hover:bg-blue-100"
                             >
+                              <Pencil className="h-3.5 w-3.5" />
                               {isEditing ? "Close" : "Edit"}
                             </button>
                           </td>
                         </tr>
 
                         {isEditing && (
-                          <tr className="bg-blue-50/40">
-                            <td colSpan={9} className="px-6 py-5">
-                              <div className="flex flex-wrap items-end gap-3">
-                                <div>
-                                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                                    Type
-                                  </label>
-                                  <Select
-                                    value={draft.dayType}
-                                    onValueChange={(val) =>
-                                      setDraft((d) => ({
-                                        ...d,
-                                        dayType: val as DayType,
-                                      }))
-                                    }
-                                  >
-                                    <SelectTrigger className="w-[130px] h-10">
-                                      <SelectValue placeholder="Select type" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {DAY_TYPES.map((t) => (
-                                        <SelectItem key={t} value={t}>
-                                          {DAY_TYPE_LABELS[t]}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-
-                                {(draft.dayType === "work" ||
-                                  draft.dayType === "wfh") && (
-                                  <>
-                                    <div>
-                                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Check in
-                                      </label>
-                                      <Input
-                                        type="time"
-                                        value={draft.checkIn}
-                                        onChange={(e) =>
-                                          setDraft((d) => ({
-                                            ...d,
-                                            checkIn: e.target.value,
-                                          }))
-                                        }
-                                        className="w-auto"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Check out
-                                      </label>
-                                      <Input
-                                        type="time"
-                                        value={draft.checkOut}
-                                        onChange={(e) =>
-                                          setDraft((d) => ({
-                                            ...d,
-                                            checkOut: e.target.value,
-                                          }))
-                                        }
-                                        className="w-auto"
-                                      />
-                                    </div>
-                                  </>
-                                )}
-
-                                <div className="flex-1 min-w-[200px]">
-                                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                                    Note
-                                  </label>
-                                  <Input
-                                    value={draft.note}
-                                    maxLength={500}
-                                    placeholder="Optional"
-                                    onChange={(e) =>
-                                      setDraft((d) => ({
-                                        ...d,
-                                        note: e.target.value,
-                                      }))
-                                    }
-                                    className="w-full"
-                                  />
-                                </div>
-
-                                <Button
-                                  onClick={() => saveDay(record.date)}
-                                  disabled={isSaving}
-                                  className="!w-auto bg-blue-600 hover:bg-blue-700"
-                                >
-                                  {isSaving ? "Saving..." : "Save"}
-                                </Button>
-                                {record._id && (
-                                  <Button
-                                    variant="outline"
-                                    onClick={() => deleteDay(record.date)}
-                                    disabled={isSaving}
-                                    className="!w-auto text-red-600 hover:text-red-700"
-                                  >
-                                    Delete
-                                  </Button>
-                                )}
+                          <tr className="bg-blue-50">
+                            <td colSpan={HEADERS.length + 1} className="p-0">
+                              {/* Pinned to the visible width so the whole
+                                  form shows without scrolling sideways. */}
+                              <div
+                                className="sticky left-0 px-3 pb-4 md:px-4 lg:px-5"
+                                style={
+                                  visibleWidth
+                                    ? { width: visibleWidth }
+                                    : undefined
+                                }
+                              >
+                                {renderEditor(record)}
                               </div>
-                              {record.note && !isSaving && (
-                                <p className="mt-3 text-xs text-gray-500">
-                                  Saved note: {record.note}
-                                </p>
-                              )}
                             </td>
                           </tr>
                         )}
@@ -1006,35 +930,38 @@ function History() {
                     );
                   })}
                 </tbody>
-                <tfoot className="bg-gray-50 border-t border-gray-200">
+                <tfoot className="border-t border-gray-100 bg-slate-50">
                   <tr>
-                    <td
-                      colSpan={3}
-                      className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-gray-600"
-                    >
-                      Total · {paidDays} paid {paidDays === 1 ? "day" : "days"}
+                    <td className={`${CELL} ${PINNED} bg-slate-50`}>
+                      <span className="block text-xs font-semibold uppercase tracking-wide text-gray-600">
+                        Total
+                      </span>
+                      <span className="block text-xs text-gray-500">
+                        {paidDays} paid {paidDays === 1 ? "day" : "days"}
+                      </span>
                     </td>
-                    <td className="px-6 py-3 font-semibold text-gray-700 whitespace-nowrap">
+                    <td colSpan={2} className={CELL} />
+                    <td className={`${CELL} font-semibold text-gray-700`}>
                       {formatDuration(totalBreak)}
                     </td>
-                    <td className="px-6 py-3 font-semibold text-gray-900 whitespace-nowrap">
+                    <td className={`${CELL} font-semibold text-gray-900`}>
                       {formatHours(totalRegular)}
                     </td>
-                    <td className="px-6 py-3 font-semibold text-blue-600 whitespace-nowrap">
+                    <td className={`${CELL} font-semibold text-blue-600`}>
                       {formatHours(totalOvertime)}
                     </td>
-                    <td className="px-6 py-3 font-semibold text-gray-900 whitespace-nowrap">
+                    <td className={`${CELL} font-semibold text-gray-900`}>
                       {formatHours(totalHours)}
                     </td>
-                    <td colSpan={2} />
+                    <td colSpan={2} className={CELL} />
                   </tr>
                 </tfoot>
               </table>
             </div>
-          )}
-        </Card>
+          </>
+        )}
       </div>
-    </div>
+    </AppShell>
   );
 }
 

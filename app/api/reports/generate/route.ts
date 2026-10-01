@@ -2,8 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { connectToDatabase } from "@/lib/db";
 import { requireAuth } from "@/lib/api-auth";
-import { getDateRange, toLocalDateKey } from "@/lib/date";
-import { getStandardHours, normalizeSchedule } from "@/lib/work-schedule";
+import {
+  APP_TIME_ZONE_LABEL,
+  addDays,
+  formatDateKey,
+  formatIstDateTime,
+  formatIstTime,
+  getDateRange,
+  toLocalDateKey,
+} from "@/lib/date";
+import {
+  DAY_LABELS,
+  formatTimeLabel,
+  getStandardHours,
+  normalizeSchedule,
+} from "@/lib/work-schedule";
 import { findHoliday, normalizeHolidays } from "@/lib/holidays";
 import {
   DAY_TYPE_LABELS,
@@ -11,52 +24,76 @@ import {
   splitHoursForDate,
   type DayType,
 } from "@/lib/attendance";
+import type {
+  ReportData,
+  ReportMonth,
+  ReportRow,
+  ReportTotals,
+} from "@/types/report";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Wrap a CSV cell, escaping quotes/commas/newlines per RFC 4180. */
-function csvCell(value: unknown): string {
-  const str = value === null || value === undefined ? "" : String(value);
-  if (/[",\n]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+function emptyTotals(): ReportTotals {
+  return {
+    paidDays: 0,
+    workedDays: 0,
+    offDays: 0,
+    leaveDays: 0,
+    lateDays: 0,
+    overtimeDays: 0,
+    breakMinutes: 0,
+    regularHours: 0,
+    overtimeHours: 0,
+    totalHours: 0,
+  };
 }
 
-function formatTime(iso?: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? ""
-    : d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+/** Fold one row into running totals. */
+function addRow(totals: ReportTotals, row: ReportRow) {
+  if (row.kind === "off") totals.offDays += 1;
+  else if (row.kind === "leave") totals.leaveDays += 1;
+  else if (row.kind !== "absent") totals.workedDays += 1;
+  if (row.kind === "late") totals.lateDays += 1;
+  if ((row.overtime ?? 0) > 0) totals.overtimeDays += 1;
+  totals.breakMinutes += row.breakMinutes ?? 0;
+  totals.regularHours += row.regular ?? 0;
+  totals.overtimeHours += row.overtime ?? 0;
+  totals.totalHours += row.total ?? 0;
+  totals.paidDays = totals.workedDays + totals.offDays + totals.leaveDays;
 }
 
-/**
- * Decimal hours → "H:MM" so the sheet reads the way people think ("8:30",
- * not "8.5"). Spreadsheets parse this as a time and can sum it with an
- * [h]:mm cell format.
- */
-function formatHoursCell(hours: number | undefined): string {
-  if (typeof hours !== "number" || !Number.isFinite(hours) || hours <= 0) {
-    return "";
-  }
-  const total = Math.round(hours * 60);
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-}
-
-function weekdayLabel(dateKey: string): string {
-  const d = new Date(`${dateKey}T00:00:00`);
-  return Number.isNaN(d.getTime())
-    ? ""
-    : d.toLocaleDateString("en-US", { weekday: "short" });
+function finishTotals<T extends ReportTotals>(totals: T): T {
+  totals.regularHours = round2(totals.regularHours);
+  totals.overtimeHours = round2(totals.overtimeHours);
+  totals.totalHours = round2(totals.totalHours);
+  return totals;
 }
 
 /**
  * GET /api/reports/generate?year=YYYY&type=monthly|yearly[&month=M]
- * Returns the user's attendance as a downloadable CSV file, laid out like the
- * history page: one row per calendar day up to today, with working hours,
- * overtime hours and total hours split out, then a summary.
+ *
+ * Returns the user's attendance as JSON, laid out like the history page: one
+ * row per calendar day up to today (IST), with working, overtime and total
+ * hours split out, plus totals and — for yearly reports — a month-by-month
+ * breakdown. The browser turns it into a PDF.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -69,86 +106,71 @@ export async function GET(req: NextRequest) {
     const type = searchParams.get("type");
     const month = searchParams.get("month");
 
-    if (!year || !type) {
+    if (!year || (type !== "monthly" && type !== "yearly")) {
       return NextResponse.json(
-        { error: "Year and type are required" },
+        { error: "Year and type (monthly or yearly) are required" },
+        { status: 400 }
+      );
+    }
+
+    const yearNum = parseInt(year);
+    const monthNum = month ? parseInt(month) : undefined;
+    if (
+      !Number.isInteger(yearNum) ||
+      (type === "monthly" &&
+        (!monthNum || !Number.isInteger(monthNum) || monthNum < 1 || monthNum > 12))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid year or month" },
         { status: 400 }
       );
     }
 
     const { db } = await connectToDatabase();
-    const attendanceCollection = db.collection("attendance");
-
-    const yearNum = parseInt(year);
-    const monthNum = month ? parseInt(month) : undefined;
-
-    // Local calendar bounds (the old UTC conversion shifted the range by a day
-    // for anyone east of UTC).
     const { startDate, endDate } =
-      type === "monthly" && monthNum
+      type === "monthly"
         ? getDateRange(yearNum, monthNum)
         : getDateRange(yearNum);
 
-    const records = await attendanceCollection
+    const records = await db
+      .collection("attendance")
       .find({ userId: user._id, date: { $gte: startDate, $lte: endDate } })
       .sort({ date: 1 })
       .toArray();
 
     // The user's schedule and holiday list decide the working/overtime split
     // and which days are paid days off.
-    let scheduleSource: unknown = null;
-    let holidaysSource: unknown = null;
+    let userRecord: Record<string, unknown> | null = null;
     try {
-      const userRecord = await db
+      userRecord = await db
         .collection("users")
         .findOne(
           { _id: new ObjectId(user._id) },
-          { projection: { workSchedule: 1, holidays: 1 } }
+          {
+            projection: {
+              name: 1,
+              email: 1,
+              avatar: 1,
+              workSchedule: 1,
+              holidays: 1,
+            },
+          }
         );
-      scheduleSource = userRecord?.workSchedule ?? null;
-      holidaysSource = userRecord?.holidays ?? null;
     } catch {
       // Defaults still produce a sensible report.
     }
-    const schedule = normalizeSchedule(scheduleSource);
-    const holidays = normalizeHolidays(holidaysSource);
-
-    const header = [
-      "Date",
-      "Day",
-      "Check In",
-      "Check Out",
-      "Break (min)",
-      "Working Hours",
-      "Overtime Hours",
-      "Total Hours",
-      "Status",
-      "Note",
-    ];
+    const schedule = normalizeSchedule(userRecord?.workSchedule ?? null);
+    const holidays = normalizeHolidays(userRecord?.holidays ?? null);
 
     const byDate = new Map(records.map((r) => [r.date as string, r]));
     const todayKey = toLocalDateKey();
     const lastDay = endDate < todayKey ? endDate : todayKey;
 
-    const rows: unknown[][] = [];
-    let workedDays = 0;
-    let offDays = 0;
-    let leaveDays = 0;
-    let lateDays = 0;
-    let overtimeDays = 0;
-    let totalRegular = 0;
-    let totalOvertime = 0;
-    let totalHours = 0;
-    let totalBreak = 0;
+    const rows: ReportRow[] = [];
 
     // One row per calendar day so Sundays and holidays show up as paid days
     // rather than silently missing, exactly like the history page.
-    for (
-      const cursor = new Date(`${startDate}T00:00:00`);
-      toLocalDateKey(cursor) <= lastDay;
-      cursor.setDate(cursor.getDate() + 1)
-    ) {
-      const dateKey = toLocalDateKey(cursor);
+    for (let dateKey = startDate; dateKey <= lastDay; dateKey = addDays(dateKey, 1)) {
       const record = byDate.get(dateKey);
       const holiday = findHoliday(dateKey, holidays);
       const weeklyOff = isWeeklyOff(dateKey, schedule);
@@ -157,11 +179,23 @@ export async function GET(req: NextRequest) {
         : weeklyOff
           ? "Weekly off"
           : "";
+      const day = formatDateKey(dateKey, { weekday: "short" });
+
+      const blank = {
+        date: dateKey,
+        day,
+        checkIn: "",
+        checkOut: "",
+        breakMinutes: null,
+        regular: null,
+        overtime: null,
+        total: null,
+        note: "",
+      };
 
       if (!record) {
         if (!offLabel) continue; // a working day with nothing recorded
-        offDays += 1;
-        rows.push([dateKey, weekdayLabel(dateKey), "", "", "", "", "", "", offLabel, ""]);
+        rows.push({ ...blank, status: offLabel, kind: "off" });
         continue;
       }
 
@@ -175,78 +209,86 @@ export async function GET(req: NextRequest) {
           : null;
 
       let status: string;
+      let kind: ReportRow["kind"];
       if (isMarkedOff) {
         status = DAY_TYPE_LABELS[dayType];
-        leaveDays += 1;
+        kind = "leave";
       } else if (record.checkInTime && !record.checkOutTime) {
         status = "No check-out";
-        workedDays += 1;
+        kind = "open";
       } else if (record.checkInTime) {
-        status = record.status === "late" ? "Late" : "Present";
+        const late = record.status === "late";
+        status = late ? "Late" : "Present";
+        if (dayType === "wfh") status += " (WFH)";
         if (offLabel) status += ` (${offLabel.toLowerCase()})`;
-        workedDays += 1;
+        kind = late ? "late" : "present";
       } else if (offLabel) {
         status = offLabel;
-        offDays += 1;
+        kind = "off";
       } else {
         status = "Absent";
+        kind = "absent";
       }
 
-      if (record.status === "late") lateDays += 1;
-      if (split && split.overtime > 0) overtimeDays += 1;
-      if (split) {
-        totalRegular += split.regular;
-        totalOvertime += split.overtime;
-        totalHours += hours as number;
-        totalBreak += record.breakMinutes || 0;
-      }
-
-      rows.push([
-        dateKey,
-        weekdayLabel(dateKey),
-        formatTime(record.checkInTime),
-        formatTime(record.checkOutTime),
-        split ? record.breakMinutes ?? 0 : "",
-        formatHoursCell(split?.regular),
-        formatHoursCell(split?.overtime),
-        formatHoursCell(hours),
+      rows.push({
+        ...blank,
+        checkIn: formatIstTime(record.checkInTime),
+        checkOut: formatIstTime(record.checkOutTime),
+        breakMinutes: split ? Math.round(record.breakMinutes ?? 0) : null,
+        regular: split && split.regular > 0 ? split.regular : null,
+        overtime: split && split.overtime > 0 ? split.overtime : null,
+        total: split && hours! > 0 ? hours! : null,
         status,
-        record.note ?? "",
-      ]);
+        kind,
+        note: (record.note as string) ?? "",
+      });
     }
 
-    const summary: unknown[][] = [
-      [],
-      ["Summary"],
-      ["Paid Days", workedDays + offDays + leaveDays],
-      ["Days Worked", workedDays],
-      ["Weekly Offs / Holidays", offDays],
-      ["Leave", leaveDays],
-      ["Late Days", lateDays],
-      ["Overtime Days", overtimeDays],
-      ["Standard Day (hours)", formatHoursCell(getStandardHours(schedule))],
-      ["Break (min)", totalBreak],
-      ["Working Hours", formatHoursCell(totalRegular)],
-      ["Overtime Hours", formatHoursCell(totalOvertime)],
-      ["Total Hours", formatHoursCell(totalHours)],
-    ];
+    const totals = emptyTotals();
+    const monthTotals = new Map<number, ReportMonth>();
+    for (const row of rows) {
+      addRow(totals, row);
+      if (type === "yearly") {
+        const m = parseInt(row.date.slice(5, 7));
+        if (!monthTotals.has(m)) {
+          monthTotals.set(m, { ...emptyTotals(), month: m, label: MONTH_NAMES[m - 1] });
+        }
+        addRow(monthTotals.get(m)!, row);
+      }
+    }
 
-    const csv = [header, ...rows, ...summary]
-      .map((row) => row.map(csvCell).join(","))
-      .join("\n");
-
-    const filename =
-      type === "monthly" && monthNum
-        ? `attendance-report-${yearNum}-${monthNum}.csv`
-        : `attendance-report-${yearNum}.csv`;
-
-    return new NextResponse(csv, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${filename}"`,
+    const data: ReportData = {
+      type,
+      year: yearNum,
+      month: type === "monthly" ? monthNum! : null,
+      periodLabel:
+        type === "monthly"
+          ? `${MONTH_NAMES[monthNum! - 1]} ${yearNum}`
+          : String(yearNum),
+      startDate,
+      endDate,
+      user: {
+        name: (userRecord?.name as string) || "",
+        email: (userRecord?.email as string) || "",
+        avatar: (userRecord?.avatar as string) || null,
       },
-    });
+      schedule: {
+        start: formatTimeLabel(schedule.startTime),
+        end: formatTimeLabel(schedule.endTime),
+        standardHours: getStandardHours(schedule),
+        breakMinutes: schedule.breakMinutes,
+        workingDays: schedule.workingDays.map((d) => DAY_LABELS[d].slice(0, 3)),
+      },
+      rows,
+      totals: finishTotals(totals),
+      months: Array.from(monthTotals.values())
+        .sort((a, b) => a.month - b.month)
+        .map(finishTotals),
+      generatedAt: formatIstDateTime(),
+      timeZone: `${APP_TIME_ZONE_LABEL} (UTC+05:30)`,
+    };
+
+    return NextResponse.json(data);
   } catch (error) {
     console.error("Error generating report:", error);
     return NextResponse.json(

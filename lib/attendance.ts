@@ -5,7 +5,7 @@
  */
 import type { WorkSchedule } from "./work-schedule";
 import { getStandardHours } from "./work-schedule";
-import { isWorkingDay } from "./date";
+import { dayOfWeek, isWorkingDay } from "./date";
 import { findHoliday, type Holiday } from "./holidays";
 
 export interface BreakEntry {
@@ -88,9 +88,8 @@ export function computeHoursWorked(
 
 /** True when the date is not one of the schedule's working days (a weekly off). */
 export function isWeeklyOff(dateKey: string, schedule: WorkSchedule): boolean {
-  const d = new Date(`${dateKey}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return false;
-  return !isWorkingDay(d, schedule.workingDays);
+  if (Number.isNaN(dayOfWeek(dateKey))) return false;
+  return !isWorkingDay(dateKey, schedule.workingDays);
 }
 
 /** True when the date is in the user's holiday list. */

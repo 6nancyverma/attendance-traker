@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/db";
 import { requireAuth } from "@/lib/api-auth";
 import {
+  addDays,
   countWorkingDaysElapsed,
   getDateRange,
+  istYearMonth,
   isWorkingDay,
   toLocalDateKey,
 } from "@/lib/date";
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const year = searchParams.get("year")
       ? parseInt(searchParams.get("year") as string)
-      : new Date().getFullYear();
+      : istYearMonth().year;
     const month = searchParams.get("month")
       ? parseInt(searchParams.get("month") as string)
       : undefined;
@@ -91,7 +93,7 @@ export async function GET(req: NextRequest) {
     // day, and treated a saved day with no check-in as attended.
     const holidayDates = new Set(holidays.map((h) => h.date));
     const isExpectedDay = (dateKey: string) =>
-      isWorkingDay(new Date(`${dateKey}T00:00:00`), schedule.workingDays) &&
+      isWorkingDay(dateKey, schedule.workingDays) &&
       !holidayDates.has(dateKey);
 
     // Saved working days without a check-in — what the history page shows
@@ -107,12 +109,7 @@ export async function GET(req: NextRequest) {
     const recordedDates = new Set(records.map((r) => r.date));
     const todayKey = toLocalDateKey(new Date());
     let unrecordedAbsent = 0;
-    for (
-      const cursor = new Date(`${effectiveStartDate}T00:00:00`);
-      ;
-      cursor.setDate(cursor.getDate() + 1)
-    ) {
-      const key = toLocalDateKey(cursor);
+    for (let key = effectiveStartDate; ; key = addDays(key, 1)) {
       if (key > endDate || key >= todayKey) break;
       if (!recordedDates.has(key) && isExpectedDay(key)) unrecordedAbsent += 1;
     }

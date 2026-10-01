@@ -8,6 +8,7 @@
  *
  * No Node-only imports — safe to import from client components.
  */
+import { istMinutesOfDay } from "./date";
 
 export interface WorkSchedule {
   /** Local "HH:MM" the working day starts. Arriving after this is late. */
@@ -79,9 +80,9 @@ export function getStandardHours(schedule: WorkSchedule): number {
   return Math.max(0, Math.round(net * 100) / 100);
 }
 
-/** True when `checkInAt` is later than startTime + graceMinutes. */
+/** True when `checkInAt` (read in IST) is later than startTime + graceMinutes. */
 export function isLateArrival(checkInAt: Date, schedule: WorkSchedule): boolean {
-  const arrived = checkInAt.getHours() * 60 + checkInAt.getMinutes();
+  const arrived = istMinutesOfDay(checkInAt);
   return arrived > timeToMinutes(schedule.startTime) + schedule.graceMinutes;
 }
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,7 +15,15 @@ import {
   getStandardHours,
   type WorkSchedule,
 } from "@/lib/work-schedule";
-import { Clock, LayoutDashboard, Menu, X } from "lucide-react";
+import { Camera, Loader2, Trash2 } from "lucide-react";
+import { UserAvatar } from "@/components/user-avatar";
+import { AppShell, PageHeader } from "@/components/app-shell";
+import { AvatarCropDialog } from "@/components/avatar-crop-dialog";
+import {
+  cropToAvatarDataUrl,
+  prepareImageFile,
+  type PixelArea,
+} from "@/lib/image";
 import type { AuthResponse } from "@/types/api";
 import {
   isValidHolidayDate,
@@ -26,8 +33,91 @@ import {
 } from "@/lib/holidays";
 
 function Settings() {
-  const { user, token, login } = useAuth();
+  const { user, token, login, avatar, setAvatar } = useAuth();
   const { toast } = useToast();
+
+  // Profile photo: the user crops it in the browser, then it is resized and
+  // stored on the account.
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [isSavingPhoto, setIsSavingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  /** Object URL of the photo being cropped; the crop dialog is open while set. */
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+
+  const closeCropper = useCallback(() => {
+    setPhotoError(null);
+    setCropSrc((src) => {
+      if (src) URL.revokeObjectURL(src);
+      return null;
+    });
+  }, []);
+
+  const handlePhotoSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be picked again later
+    if (!file) return;
+    setPhotoError(null);
+    try {
+      setCropSrc(prepareImageFile(file));
+    } catch (err) {
+      setPhotoError(
+        err instanceof Error ? err.message : "Could not open that image."
+      );
+    }
+  };
+
+  const handleCropSave = async (area: PixelArea) => {
+    if (!cropSrc) return;
+    setPhotoError(null);
+    setIsSavingPhoto(true);
+    try {
+      const image = await cropToAvatarDataUrl(cropSrc, area);
+      const res = await fetch("/api/settings/avatar", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ image }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPhotoError(data.error || "Could not save your photo.");
+        return;
+      }
+      setAvatar(data.avatar);
+      closeCropper();
+      toast({ title: "Photo updated", description: "Looking good!" });
+    } catch (err) {
+      setPhotoError(
+        err instanceof Error ? err.message : "Could not save your photo."
+      );
+    } finally {
+      setIsSavingPhoto(false);
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    setPhotoError(null);
+    setIsSavingPhoto(true);
+    try {
+      const res = await fetch("/api/settings/avatar", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPhotoError(data.error || "Could not remove your photo.");
+        return;
+      }
+      setAvatar(null);
+      toast({ title: "Photo removed" });
+    } catch {
+      setPhotoError("An error occurred. Please try again.");
+    } finally {
+      setIsSavingPhoto(false);
+    }
+  };
 
   // Profile: name and email. The values live in the JWT as well, so a save
   // returns a fresh token which `login` stores — the header updates at once.
@@ -108,19 +198,6 @@ function Settings() {
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(true);
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const headerRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
-        setIsMobileMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
   // Holidays: paid days off that show in history and never count as absent.
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [holidayDate, setHolidayDate] = useState("");
@@ -320,65 +397,113 @@ function Settings() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      <header ref={headerRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Clock className="w-8 h-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-900">
-              AttendanceApp
-            </span>
-          </div>
+    <AppShell>
+      <div className="mx-auto max-w-3xl">
+        <PageHeader
+          title="Settings"
+          description="Manage your profile, work schedule, holidays and password."
+        />
 
-          {/* Mobile Menu Toggle */}
-          <div className="md:hidden flex items-center">
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="text-gray-600 hover:text-gray-900 focus:outline-none"
-            >
-              {isMobileMenuOpen ? (
-                <X className="w-6 h-6" />
-              ) : (
-                <Menu className="w-6 h-6" />
-              )}
-            </button>
-          </div>
-
-          {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-4">
-            <Link href="/dashboard">
-              <Button variant="outline" size="sm">
-                <LayoutDashboard className="w-4 h-4 mr-2" />
-                Dashboard
-              </Button>
-            </Link>
-          </div>
-        </div>
-
-        {/* Mobile Navigation */}
-        {isMobileMenuOpen && (
-          <div className="md:hidden absolute top-full left-0 w-full bg-white border-t border-gray-100 shadow-lg">
-            <div className="px-4 pt-2 pb-4 space-y-2 flex flex-col">
-              <Link href="/dashboard">
-                <Button variant="ghost" className="w-full justify-start text-gray-700 font-normal">
-                  <LayoutDashboard className="w-4 h-4 mr-2" />
-                  Dashboard
-                </Button>
-              </Link>
-            </div>
-          </div>
-        )}
-      </header>
-
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
-
-        <Card className="px-2 py-4 lg:p-6 bg-white mb-6">
+        <Card className="rounded-2xl border-gray-100 p-4 shadow-sm sm:p-6 bg-white mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">Profile</h2>
           <p className="text-sm text-gray-600 mb-6">
-            Your name appears on the dashboard and in reports. Changing your
+            Your photo and name appear on the dashboard and in reports. Changing your
             email changes what you sign in with, so it asks for your password.
           </p>
+
+          <div className="mb-6 flex flex-col items-center gap-4 rounded-2xl bg-gradient-to-br from-blue-50 via-indigo-50 to-white p-4 text-center sm:p-5 sm:flex-row sm:items-center sm:gap-6 sm:text-left">
+            {/* shrink-0 keeps the photo a perfect circle in narrow layouts */}
+            <button
+              type="button"
+              onClick={() => photoInputRef.current?.click()}
+              disabled={isSavingPhoto}
+              className="group relative shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              aria-label="Change profile photo"
+            >
+              <UserAvatar
+                src={avatar}
+                name={user?.name}
+                size={96}
+                className="ring-4 shadow-md"
+              />
+              <span className="absolute inset-0 hidden items-center justify-center rounded-full bg-black/40 text-white opacity-0 transition-opacity group-hover:opacity-100 sm:flex">
+                {isSavingPhoto ? (
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                ) : (
+                  <Camera className="w-6 h-6" />
+                )}
+              </span>
+              {/* Always-visible badge: touch screens have no hover. */}
+              <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-white shadow-md ring-2 ring-white">
+                {isSavingPhoto ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Camera className="h-4 w-4" />
+                )}
+              </span>
+            </button>
+
+            <div className="w-full min-w-0 sm:flex-1">
+              <p className="truncate text-base font-semibold text-gray-900">
+                {user?.name}
+              </p>
+              <p className="truncate text-sm text-gray-500">{user?.email}</p>
+              <p className="mt-1 text-xs text-gray-500">
+                JPEG, PNG or WebP · you can choose which part to use
+              </p>
+
+              <div className="mt-4 flex gap-2 sm:justify-start">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={isSavingPhoto}
+                  onClick={() => photoInputRef.current?.click()}
+                  className="flex-1 whitespace-nowrap bg-white sm:flex-none"
+                >
+                  <Camera />
+                  {isSavingPhoto
+                    ? "Saving..."
+                    : avatar
+                      ? "Change photo"
+                      : "Upload photo"}
+                </Button>
+                {avatar && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={isSavingPhoto}
+                    onClick={handleRemovePhoto}
+                    className="flex-1 whitespace-nowrap border-red-200 bg-white text-red-600 hover:bg-red-50 hover:text-red-700 sm:flex-none"
+                  >
+                    <Trash2 />
+                    Remove
+                  </Button>
+                )}
+              </div>
+              {photoError && (
+                <p className="mt-2 text-sm text-red-600">{photoError}</p>
+              )}
+            </div>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={handlePhotoSelected}
+            />
+          </div>
+
+          {cropSrc && (
+            <AvatarCropDialog
+              src={cropSrc}
+              saving={isSavingPhoto}
+              error={photoError}
+              onCancel={closeCropper}
+              onSave={handleCropSave}
+            />
+          )}
 
           <form onSubmit={handleSaveProfile} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -475,7 +600,7 @@ function Settings() {
           </form>
         </Card>
 
-        <Card className="px-2 py-4 lg:p-6 bg-white mb-6">
+        <Card className="rounded-2xl border-gray-100 p-4 shadow-sm sm:p-6 bg-white mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">
             Work schedule
           </h2>
@@ -489,7 +614,7 @@ function Settings() {
             <p className="text-sm text-gray-500">Loading…</p>
           ) : (
             <form onSubmit={handleSaveSchedule} className="space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-lg">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 max-w-lg">
                 <div>
                   <label
                     htmlFor="startTime"
@@ -578,7 +703,7 @@ function Settings() {
                   />
                 </div>
 
-                <div>
+                <div className="col-span-2 sm:col-span-1">
                   <label
                     htmlFor="overtimeGraceMinutes"
                     className="block text-sm font-medium text-gray-700 mb-2"
@@ -677,7 +802,7 @@ function Settings() {
           )}
         </Card>
 
-        <Card className="px-2 py-4 lg:p-6 bg-white mb-6">
+        <Card className="rounded-2xl border-gray-100 p-4 shadow-sm sm:p-6 bg-white mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">Holidays</h2>
           <p className="text-sm text-gray-600 mb-6">
             Public holidays are paid days off. They appear in your history,
@@ -785,7 +910,7 @@ function Settings() {
           </Button>
         </Card>
 
-        <Card className="px-2 py-4 lg:p-6 bg-white">
+        <Card className="rounded-2xl border-gray-100 p-4 shadow-sm sm:p-6 bg-white">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">
             Change password
           </h2>
@@ -878,7 +1003,7 @@ function Settings() {
           </form>
         </Card>
       </div>
-    </div>
+    </AppShell>
   );
 }
 

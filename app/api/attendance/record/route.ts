@@ -8,6 +8,7 @@ import {
   timeToMinutes,
 } from "@/lib/work-schedule";
 import { normalizeHolidays } from "@/lib/holidays";
+import { istMinutesOfDay, istWallClockToIso } from "@/lib/date";
 import {
   computeHoursWorked,
   effectiveBreakMinutes,
@@ -25,7 +26,7 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 interface UpsertBody {
   date?: string;
   dayType?: DayType;
-  /** The user's local "HH:MM"; empty string clears the time. */
+  /** The user's IST "HH:MM"; empty string clears the time. */
   checkIn?: string;
   checkOut?: string;
   /**
@@ -40,19 +41,14 @@ interface UpsertBody {
   note?: string;
 }
 
-/**
- * Fallback for callers that only send HH:MM: combine it with the date in the
- * server's own timezone. Only correct when server and user share a timezone.
- */
+/** Fallback for callers that only send HH:MM: read it as IST on that date. */
 function toIso(dateKey: string, time: string): string | null {
-  if (!isValidTime(time)) return null;
-  const d = new Date(`${dateKey}T${time}:00`);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  return istWallClockToIso(dateKey, time);
 }
 
 /**
  * Work out the stored timestamp for one of the two times.
- * Precedence: exact instant from the browser → HH:MM (server-local fallback)
+ * Precedence: exact instant from the browser → HH:MM (IST fallback)
  * → whatever is already stored.
  */
 function resolveTime(
@@ -233,8 +229,7 @@ export async function PUT(req: NextRequest) {
       if (body.checkIn && isValidTime(body.checkIn)) {
         arrivedMinutes = timeToMinutes(body.checkIn);
       } else if (checkInTime !== existing?.checkInTime) {
-        const arrived = new Date(checkInTime);
-        arrivedMinutes = arrived.getHours() * 60 + arrived.getMinutes();
+        arrivedMinutes = istMinutesOfDay(new Date(checkInTime));
       }
       if (arrivedMinutes !== null) {
         const late =
